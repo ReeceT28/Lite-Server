@@ -17,12 +17,16 @@ int main()
         return 1;
     }
 
-    sockaddr_in serverAddr;
+    sockaddr_in serverAddr{};
     serverAddr.sin_family = AF_INET;
     // htons converts from little-endian (how computers store multi-byte values) to big-endian (how network protocols store multi-byte values)
     serverAddr.sin_port = htons(8080);
     // INADDR_ANY means that we accept connection on all local network interfaces
     serverAddr.sin_addr.s_addr = INADDR_ANY;
+
+
+    int opt = 1;
+    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     // Associates a socket with an IP address and port number
     if (bind(serverSocket, (sockaddr *)&serverAddr, sizeof(serverAddr)) == -1)
@@ -52,8 +56,27 @@ int main()
         return 1;
     }
 
-    const char *message = "Hello World!";
-    send(clientSocket, message, std::strlen(message), 0);
+    char buffer[1024];
+    while(1)
+    {
+        ssize_t byteSize = recv(clientSocket, buffer, sizeof(buffer) -1, 0);
+        if(byteSize > 0)
+        {
+            buffer[byteSize] = '\0';
+            std::cout<<"Received: " << buffer << '\n';
+        }
+        else if(byteSize == 0)
+        {
+            std::cout<<"Client disconnected\n";
+            break;
+        }
+        else
+        {
+            std::cerr<<"Error in receiving transmission from client\n";
+            return 1;
+        }
+    }
+
     close(clientSocket);
     close(serverSocket);
 
