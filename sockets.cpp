@@ -3,11 +3,46 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <thread>
+#include <atomic>
+#include <mutex>
+
+std::atomic<bool> running(true);
+std::mutex cout_mutex;
+
+void serverReceive(int clientSocket)
+{
+    int msg = 1;
+    char buffer[1024];
+    while(running)
+    {
+        ssize_t byteSize = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+        if(byteSize>0)
+        {
+            buffer[byteSize] = '\0';
+            std::lock_guard<std::mutex> lock(cout_mutex);
+            std::cout << "Client > " << buffer << '\n';
+        }
+    }
+}
+
+void serverSend(int clientSocket)
+{
+    std::string line;
+    while(running && std::getline(std::cin, line))
+    {
+        if(line == "exit") running = false;
+        std::lock_guard<std::mutex> lock(cout_mutex);
+        line += '\n';
+        line = "Server > " + line;
+        send(clientSocket, line.c_str(), line.size(), 0);
+    }
+    shutdown(clientSocket, SHUT_RDWR);
+}
 
 int main()
 {
     // Useful reference for these functions: https://pubs.opengroup.org/onlinepubs/9799919799/
-
     // AF_INET for IPv4, SOCK_STREAM for socket type (used for TCP), 0for default protocol of for the requested socket type, in this case TCP
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket == -1)
@@ -56,29 +91,16 @@ int main()
         return 1;
     }
 
-    char buffer[1024];
-    while(1)
-    {
-        ssize_t byteSize = recv(clientSocket, buffer, sizeof(buffer) -1, 0);
-        if(byteSize > 0)
-        {
-            buffer[byteSize] = '\0';
-            std::cout<<"Received: " << buffer << '\n';
-        }
-        else if(byteSize == 0)
-        {
-            std::cout<<"Client disconnected\n";
-            break;
-        }
-        else
-        {
-            std::cerr<<"Error in receiving transmission from client\n";
-            return 1;
-        }
-    }
+    std::cout << "The server has begun talking\n";
+
+    std::thread t1(serverSend, clientSocket);
+    std::thread t2(serverReceive, clientSocket);
+    t1.join();
+    t2.join();
 
     close(clientSocket);
     close(serverSocket);
 
     return 0;
 }
+
