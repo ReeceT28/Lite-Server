@@ -3,7 +3,6 @@
 #include <stdio.h>
 #define SEND_BUF_SIZE 4096
 #define MAX_REQUEST_HEADERS 32
-// RESOLVE_NO_SYMLINKS
 
 /* request_header represents a HTTP header, it is used for requests NOT for responses.
  * It stores pointers to the name and value of a header along with the lengths of their strings.

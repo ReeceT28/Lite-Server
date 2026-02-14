@@ -1,0 +1,8 @@
+PROJECT_NAME           = "Http Server"
+INPUT                  = .
+RECURSIVE              = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HAVE_DOT               = YES
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
