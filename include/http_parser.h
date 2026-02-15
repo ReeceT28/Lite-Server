@@ -1,8 +1,13 @@
 #pragma once
 #include <stdlib.h>
 #include <stdio.h>
+
 #define SEND_BUF_SIZE 4096
 #define MAX_REQUEST_HEADERS 32
+
+#define IS_OWS(c) (c == ' ' || c == '\t')
+
+
 
 /* request_header represents a HTTP header, it is used for requests NOT for responses.
  * It stores pointers to the name and value of a header along with the lengths of their strings.
@@ -36,30 +41,47 @@ typedef struct
     size_t request_len; /* Length of the original request */
 } http_request;
 
-
-// Purpose: Parse a token
-// Special Parameters: token_start - pointer to pointer of const char which points to start of token, token_len - length of token, delimiter
-// Return Values: If success - buf. If fails - nullptr. Also modifies token_start and token_len so is effectively "returning" these
-const char* parse_token(const char* buf, const char* buf_end, const char** token_start, size_t* token_len, char delimiter, int* err_code)
+/**
+ * @brief Parse a string up to a specified delimiter.
+ * @param[in] start Pointer to the start of the string we want to parse.
+ * @param[in] end Pointer to the end of the string we want to parse.
+ * @param[out] token_start Pointer to a Pointer storing the start of the token
+ * @param[out] token_len
+ * 
+ */
+const char* parse_token(const char* start, const char* end, const char** token_start, size_t* token_len, char delimiter, int* err_code)
 {
-    if(buf == buf_end){ *err_code = -2; return NULL;}
-    *token_start = buf;
-    while(buf < buf_end)
+    if(start == end){ *err_code = -2; return NULL;}
+    *token_start = start;
+    while(start < end)
     {
-        if(*buf == delimiter) break;
-        buf++;
+        if(*start == delimiter) break;
+        start++;
     }
-    *token_len = buf - *token_start;
+    *token_len = start - *token_start;
     // Currently buf is at the last character of the token (the delimiter) but buf should point to next charater/ byte to be read
-    if(buf < buf_end) buf++;
+    if(start < end) start++;
 
-    return buf;
+    return start;
 }
 
-const char* skip_ows(const char* buf, const char* buf_end)
+/**
+ * @brief Skip a block of OWS as defined in RFC 9110 Section 5.6.3.
+ * 
+ * Skips a block of Optional White Space (OWS) which is defined in RFC 9110 Section 5.6.3. 
+ * Optional White Space is any number of consecutive SP | HTAB characters.
+ * 
+ * @param[in] start Pointer to starting position in string.
+ * @param[in] end Pointer to end of string.
+ * 
+ * @return Returns a pointer to the next character after the start pointer which is NOT White Space.
+ * @note Maybe experiment with inlining, however this could be worse as it could have effects to caching? But I am not that familiar with this so will need testing/ research.
+ */
+const char* skip_ows(const char* start, const char* end)
 {
-    while(buf < buf_end && (*buf == ' ' || *buf == '\t')) buf++;
-    return buf;
+    while(start < end && IS_OWS(*start))
+        start++;
+    return start;
 }
 
 // Purpose: Parse what is remaining of a line
