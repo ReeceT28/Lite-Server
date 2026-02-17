@@ -1,0 +1,8 @@
+-Wall
+-Wextra
+-std=c17
+-O3
+-I./include
+-I./src
+-x
+c
