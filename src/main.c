@@ -131,26 +131,96 @@ void test_request_parse()
     }
 }
 
+// Example: simple print function for parsed HTTP request
+void print_parsed_request(const http_request* req) {
+    printf("Original Request:\n%.*s\n", (int)req->request_len, req->raw_request);
 
-int main()
-{
-    const int num_tests = 1;
-    const int num_iterations = 5000000;
+    const char* methods[] = {"GET", "PUT", "HEAD", "POST", "TRACE", "DELETE", "CONNECT", "OPTIONS"};
+    printf("Method: %s\n", methods[req->method]);
 
-    for (int i = 0; i < num_tests; ++i)
-    {
-        count = 0;
-        for (int j = 0; j < num_iterations; ++j)
-        {
-            test_request_parse();
-            count++;
-        }
+    if(req->schema_start && req->schema_end)
+        printf("Schema: %.*s\n", (int)(req->schema_end - req->schema_start), req->schema_start);
+
+    if(req->host_start && req->host_end)
+        printf("Host: %.*s\n", (int)(req->host_end - req->host_start), req->host_start);
+
+    if(req->port_start && req->port_end)
+        printf("Port: %.*s\n", (int)(req->port_end - req->port_start), req->port_start);
+
+    if(req->path_start && req->path_end)
+        printf("Path: %.*s\n", (int)(req->path_end - req->path_start), req->path_start);
+
+    if(req->query_start && req->query_end)
+        printf("Query: %.*s\n", (int)(req->query_end - req->query_start), req->query_start);
+
+    if(req->version_start && req->version_end)
+        printf("HTTP Version: %.*s\n", (int)(req->version_end - req->version_start), req->version_start);
+
+    printf("HTTP Major: %u, Minor: %u\n", req->http_major, req->http_minor);
+}
+
+// Test HTTP request array
+const char* test_requests[] = {
+    "GET / HTTP/1.1\r\n\r\n",
+    "POST /submit HTTP/1.0\r\nContent-Length: 5\r\n\r\nHello",
+    "PUT /resource/123?verbose=true HTTP/1.1\r\n\r\n",
+    "HEAD /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n",
+    "DELETE /items/42 HTTP/1.1\r\n\r\n",
+    "CONNECT www.example.com:443 HTTP/1.1\r\n\r\n",
+    "OPTIONS * HTTP/1.1\r\n\r\n",
+    "TRACE /debug HTTP/1.1\r\n\r\n",
+    "GET http://example.com/path/to/resource?foo=bar&baz=qux HTTP/1.1\r\n\r\n",
+    "GET https://[2001:db8::1]/path HTTP/1.1\r\n\r\n",
+    "GET /path/with%20spaces?query=1+2 HTTP/1.1\r\n\r\n",
+    "GET /complex/path/?a=1&b=2&c=3 HTTP/2.0\r\n\r\n"
+};
+
+int main() {
+    size_t n_requests = sizeof(test_requests)/sizeof(test_requests[0]);
+    for(size_t i = 0; i < n_requests; ++i) {
+        http_request req;
+        memset(&req, 0, sizeof(req));
+        req.raw_request = (const u_char*)test_requests[i];
+        req.request_len = strlen(test_requests[i]);
+        req.http_major = 67;
+        req.http_minor = 67;
+        req.header_count = 0;
+        const u_char *cursor = req.raw_request;
+        const u_char *end = cursor + req.request_len;
+        lite_server_config *conf;
+        int err_code;
+        cursor = parse_request_line_op1(cursor, end, &req, conf, &err_code);
+
+        print_parsed_request(&req);
+        printf("--------------------------------------------------\n");
     }
-
-    // printf("Option count: %zu", option_count);
     return 0;
 }
 
+
+
+
+
+
+//int main()
+//{
+//    const int num_tests = 1;
+//    const int num_iterations = 5000000;
+//
+//    for (int i = 0; i < num_tests; ++i)
+//    {
+//        count = 0;
+//        for (int j = 0; j < num_iterations; ++j)
+//        {
+//            test_request_parse();
+//            count++;
+//        }
+//    }
+//
+//    // printf("Option count: %zu", option_count);
+//    return 0;
+//}
+//
 
 
 

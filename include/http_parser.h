@@ -117,6 +117,7 @@ static inline int is_tchar(unsigned char c)
     /* c >> 6 gives index in tchar_table as it is basically doing c DIV 64. c & 63 is basically just c % 64 to keep the part we are interested in.*/
     return (tchar_table[c >> 6] >> (c & 63)) & 1;
 }
+
 /** 
  * @brief Represents a HTTP header, used for http requests.
  */
@@ -139,37 +140,42 @@ enum {
     LS_HTTP_OPTIONS
 };
 
+/**
+ *  RFC 9110 Section 9.1: 
+ * "An origin server that receives a request method that is unrecognized or not implemented SHOULD respond with the 501 (Not Implemented) status code"
+ * 
+ */
+enum {
+    LS_ERR_BAD_REQUEST,
+    LS_ERR_NOT_IMPLEMENTED
+};
+
 /*
  * @brief represents a HTTP request.
  */
 typedef struct
 {
     int method;
-    const u_char* method_start;                                /**< HTTP method e.g. GET */
-    size_t method_len;                                 /**< Length of method string */
+    const u_char* schema_start;
+    const u_char* schema_end;
+    const u_char* host_start;
+    const u_char* host_end;
+    const u_char* port_start;
+    const u_char* port_end;
+    const u_char* query_start;
+    const u_char* query_end;
     const u_char* path_start;                                  /**< Path of the request */
-    size_t path_len;                                   /**< Length of the path string */
+    const u_char* path_end;                                   /**< Length of the path string */
     const u_char* version_start;                               /**<  The HTTP version */
-    size_t version_len;                                /**< Length of the version string */
+    const u_char* version_end;                                /**< Length of the version string */
     request_header headers[MAX_REQUEST_HEADERS];       /**< Array of request_headers */
     size_t header_count;                               /**< Number of headers currently in array */
     const u_char* raw_request;                           /**< Pointer to original raw request */
     size_t request_len;                                /**< Length of the original request */
+    unsigned int http_minor;
+    unsigned int http_major;
 } http_request;
 
-
-/**
- * @brief Parse a string up to a specified delimiter.
- * @param[in] start Pointer to the start of the string we want to parse.
- * @param[in] end Pointer to the end of the string we want to parse.
- * @param[out] token_start Pointer to Pointer to start of token.
- * @param[out] token_len Pointer to length of the token.
- * @param[in] delimiter The delimiting character.
- * @return Returns a pointer to the position after the delimiter OR a pointer to end if the delimiter was not found.
- * @warning It is left up to the caller to check if start >= end indicating the delimiter was never found and actually generate an error.
- */
-const char* parse_token(const char* start, const char* end, const char** token_start, size_t* token_len, const char delimiter,
-    int (*is_valid)(unsigned char), int* err_code);
 
 void parse_request(http_request* req, int* err_code, const lite_server_config* lt_config);
 
@@ -177,23 +183,11 @@ const u_char* parse_request_line_op1(const u_char* cursor, const u_char* end, ht
     const lite_server_config* ls_config, int* err_code);
 
 const u_char* parse_request_line_op2(const u_char* cursor, const u_char* end, http_request* req,
-    const lite_server_config* ls_config, int* err_code);
+    const lite_server_config* ls_config, int* );
 
 const u_char* parse_request_line_op3(const u_char* cursor, const u_char* end, http_request* req,
     const lite_server_config* ls_config, int* err_code);
     
-///**
-// * @brief Parse a field name ensuring all checks are performed to be Unconditionally Compliant.
-// * @param[in] start Pointer to the start of the field name we want to parse.
-// * @param[in] end Pointer to the end of the string we want to parse.
-// * @param[out] token_start Pointer to Pointer to start of token.
-// * @param[out] token_len Pointer to length of the token.
-// * @param[in] delimiter The delimiting character.
-// * @param[out] err_code Error code. 
-// * @return Returns a pointer to the position after the delimiter OR a pointer to end if the delimiter was not found.
-// * @warning The caller should check if start >= end if they do not want this behaviour to occur. Which most callers won't
-// */
-//const char* parse_field_name(const char* start, const char* end, const char** token_start, size_t* token_len, const char delimiter, int* err_code);
 ///**
 // * @brief Skip a block of OWS as defined in RFC 9110 Section 5.6.3.
 // * Skips a block of Optional White Space (OWS) which is defined in RFC 9110 Section 5.6.3. 
@@ -211,7 +205,7 @@ const u_char* parse_request_line_op3(const u_char* cursor, const u_char* end, ht
 //        ++start;
 //    return start;
 //}
-//
+
 ///**
 // * @brief Parses from a given starting position up to the end of a line 
 // * Parses from a given starting position up to the end of a line. The line terminator is specified as a CRLF (\r\n) in RFC 9112 Section 2.2.
@@ -249,38 +243,12 @@ const u_char* parse_request_line_op3(const u_char* cursor, const u_char* end, ht
 //    *err_code = -1;
 //    return NULL;
 //}
-//
+
 ///*
 // * RFC 9112 Section 2.2 States that:
 // * "In the interest of robustness, a server that is expecting to receive and parse a request-line SHOULD ignore at least one empty line (CRLF) received prior to the request-line"
 // */
-//static inline const char* skip_leading_crlf(const char* cursor, const char* end, int* err_code)
-//{
-//    int skipped = 0;
-//    while (skipped < MAX_LEADING_CRLF && cursor < end)
-//    {
-//        if(*cursor == '\r')
-//        {
-//            if(cursor+1 >= end)
-//            {
-//                *err_code = -1; /* Cursor has reached end unexpectedly */
-//                return NULL;
-//            }
-//            if(*(cursor+1) != '\n')
-//            {
-//                *err_code = -2; /* Malformed CRLF (CR missing its LF) */
-//                return NULL;
-//            }
-//            cursor += 2;
-//            ++skipped;
-//            continue;
-//        }
-//        return cursor;
-//    }
-//    *err_code = -5; /* Too many leading CRLF before request line */
-//    return NULL;
-//}
-//
+
 //const char* parse_headers(const char* buf, const char* buf_end, int* err_code, http_request* req)
 //{
 //    while(buf < buf_end)
@@ -318,5 +286,5 @@ const u_char* parse_request_line_op3(const u_char* cursor, const u_char* end, ht
 //    *err_code = -1;
 //    return NULL;
 //}
-//
-//void parse_request(http_request* req, int* err_code, const lite_server_config* lt_config);
+
+
