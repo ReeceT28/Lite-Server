@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <memory.h>
 #include "server_config.h"
 #include "http_parser.h"
@@ -141,18 +140,7 @@ static const u_char ip_literal_chars[256] = {
     /* Can add more if want support for IPvFuture */
 };
 
-// Helper function for scanning the request path
-static inline const u_char* parse_path(const u_char* cursor, const u_char* end, http_request* req)
-{
-    // Hot loop — register-only
-    while(cursor < end && path_chars[*cursor])
-        ++cursor;
 
-    // Store the end of the path
-    req->path_end = cursor;
-
-    return cursor;
-}
 
 /** Theory of parser:
  * - Finite state machine parsers sometimes use for loops to iterate the cursor (like nginx). 
@@ -167,857 +155,467 @@ static inline const u_char* parse_path(const u_char* cursor, const u_char* end, 
  * I would assume JMP is a very common assembly instruction so why avoid its equivalent in C.
  * end points to a null terminator so is safe to dereference and I take advantage of that at points.
  */
+/* Array of function pointers indexed by LS_HTTP_* enum */
+parse_func parse_jump_table[] = {
+    parse_method,                // LS_HTTP_METHOD
+    parse_custom_method,         // LS_HTTP_CUSTOM_HTTP_METHOD
+    parse_space_after_method,    // LS_HTTP_SPACE_AFTER_METHOD
+    parse_req_target_type,       // LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE
+    parse_schema,                // LS_HTTP_SCHEMA
+    parse_schema_slash,          // LS_HTTP_SCHEMA_SLASH
+    parse_schema_slash_slash,    // LS_HTTP_SCHEMA_SLASH_SLASH
+    parse_host_start,            // LS_HTTP_HOST_START
+    parse_host_reg_name,         // LS_HTTP_HOST_REG_NAME
+    parse_host_ip_literal,       // LS_HTTP_HOST_IP_LITERAL
+    parse_host_end,              // LS_HTTP_HOST_END
+    parse_port,                  // LS_HTTP_PORT
+    parse_after_slash_in_path,   // LS_HTTP_AFTER_SLASH_IN_PATH
+    parse_handle_query,          // LS_HTTP_HANDLE_QUERY
+    parse_http_version,          // LS_HTTP_VERSION
+    parse_end_of_request_line    // LS_HTTP_END_OF_REQUEST_LINE
+};
 
-
-
-const u_char* parse_request_line_op1(const u_char* cursor, const u_char* end, http_request* req, int* err_code, void** state)
+const u_char* parse_request_line(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
-    /* Return to previous state if we are calling repeatedly */
-    if(state && *state)
-        goto *state;
-    /**
-     * The shortest HTTP request is: "GET / HTTP/1.1\n\n" which is 16 characters long if we allow \n instead of \r\n.
-     * The max amount we check for a method is 8 so we can check this condition to ensure the request is valid and all methods can be safely checked. 
-     * Without testing I think it is also unlikely that we would read() less than 8 bytes of a request to start with but I am not sure. 
-     */
-    if (unlikely(cursor + 8 >= end))
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        return cursor;
+    if (!state) return NULL;
+
+    while (1) {
+        if (*state < 0 || *state >= sizeof(parse_jump_table)/sizeof(parse_jump_table[0]))
+            return NULL;
+
+        const u_char* next = parse_jump_table[*state](cursor, end, req, err_code, state);
+        if (!next) return NULL;
+
+        // If parser tells us to pause (need more chars), return immediately
+        if (*err_code == LS_ERR_NEED_MORE_CHARS)
+            return next;
+
+        cursor = next;
+
+        // End of request line
+        if (*state == LS_HTTP_END_OF_REQUEST_LINE)
+            break;
     }
 
-
-    /* HTTP method */
-    /* Fast track for GET and POST which are by far the most common methods */
-    if(likely(P(cursor) == LS_CHAR4_INT('G', 'E', 'T', ' ')))
-    {
-        req->method = LS_HTTP_GET;
-        cursor += 4;
-        goto figure_out_req_target_type;
-    }
-    else if(likely(P(cursor) == LS_CHAR4_INT('P', 'O', 'S', 'T')))
-    {
-        req->method = LS_HTTP_POST;
-        cursor += 4;
-        goto space_after_method;
-    }
-    else
-    {
-        /* Handle the more uncommon methods */
-        switch (P(cursor))
-        {
-        case LS_CHAR4_INT('P', 'U', 'T', ' '):
-            req->method = LS_HTTP_PUT;
-            cursor += 4; 
-            goto figure_out_req_target_type;
-        case LS_CHAR4_INT('H', 'E', 'A', 'D'):
-            req->method = LS_HTTP_HEAD;
-            cursor += 4;
-            goto space_after_method;
-        case LS_CHAR4_INT('D', 'E', 'L', 'E'):
-            if (likely(*(cursor + 4) == 'T' && *(cursor + 5) == 'E'))
-            {
-                req->method = LS_HTTP_DELETE;
-                cursor += 6;
-                goto space_after_method;
-            }
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL; 
-        case LS_CHAR4_INT('C', 'O', 'N', 'N'):
-            if (likely(P(cursor + 4) == LS_CHAR4_INT('E', 'C', 'T', ' ')))
-            {
-                req->method = LS_HTTP_CONNECT;
-                cursor += 8;
-                req->host_start = cursor;
-                goto host_start;
-            }
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL; 
-        case LS_CHAR4_INT('O', 'P', 'T', 'I'):
-            if (likely(P(cursor + 4) == LS_CHAR4_INT('O', 'N', 'S', ' ')))
-            {
-                req->method = LS_HTTP_OPTIONS;
-                cursor += 8;
-                goto figure_out_req_target_type;
-            }
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL; 
-        case LS_CHAR4_INT('T', 'R', 'A', 'C'):
-            if (likely(*(cursor + 4) == 'E'))
-            {
-                req->method = LS_HTTP_TRACE;
-                cursor += 5;
-                goto space_after_method;
-            }
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL; 
-        default:
-            /* Allow customised http methods */
-            req->method_start = cursor;
-        custom_http_method:
-            while(cursor < end && method_chars[*cursor])
-                ++cursor;
-            if(cursor >= end)
-            {
-                *err_code = LS_ERR_NEED_MORE_CHARS;
-                *state = &&custom_http_method;
-                return cursor;
-            }
-            if(*cursor != ' ')
-            {
-                *err_code = LS_ERR_BAD_REQUEST;
-                return NULL;
-            }
-            goto figure_out_req_target_type;
-        }
-    }
-space_after_method:
-    /* Skip the space after the method */
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&space_after_method;
-        return cursor;
-    }
-    if(unlikely(*cursor != ' '))
-    {
-        *err_code = LS_ERR_BAD_REQUEST;
-        return NULL;
-    }
-    ++cursor;
-    /* Fall down */
-figure_out_req_target_type:
-    if(*cursor == '/')
-    {
-        req->path_start = cursor;
-        /* We can still be sure we have clearance from the first check before method */
-        ++cursor;
-        goto after_slash_in_path; /* Origin form request follows this path */
-    } 
-
-    /* OR with 0x20 converts upper to lower and keeps lower, lower */
-    /* a <= ch <= z   ->   0 <= ch - 'a' <= 'z' - 'a' */
-    /* if ch - 'a' is negative it underflows it will always go larger than 'z' - 'a' anyway */
-    if((*cursor | 0x20) - 'a' <= 'z' - 'a'){ goto schema; } /* Absolute form request follows this parth*/
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&figure_out_req_target_type;
-        return cursor;
-    }
-    *err_code = LS_ERR_BAD_REQUEST;
-    return NULL;
-schema:
-    req->schema_start = cursor;
-    while(cursor < end && schema_chars[*cursor])
-        ++cursor;
-    if(likely(*cursor == ':'))
-    {
-        req->schema_end = cursor;
-        ++cursor;
-        goto schema_slash;
-    }
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&schema;
-        return cursor;
-    }
-    *err_code = LS_ERR_BAD_REQUEST;
-    return NULL;
-schema_slash:
-    if(likely(*cursor == '/'))
-    {
-        ++cursor;
-        goto schema_slash_slash;
-    }
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&schema_slash;
-        return cursor;
-    }
-    *err_code = LS_ERR_BAD_REQUEST;
-    return NULL;
-schema_slash_slash:
-    if(likely(*cursor == '/'))
-    {
-        ++cursor;
-        goto host_start;
-    }
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&schema_slash_slash;
-        return cursor;
-    }
-    *err_code = LS_ERR_BAD_REQUEST;
-    return NULL;
-host_start:
-    /* RFC 3986 Section 3.2.2 states       host = IP-literal / IPv4address / reg-name                */
-    /* I let IPv4 be processed as reg_name as reg_name can contain digits and '.'        */
-    req->host_start = cursor;
-    if(unlikely(*cursor == '['))
-    {
-        ++cursor;
-        goto host_ip_literal;
-    }
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&host_start;
-        return cursor;
-    }
-    /* Fall through to host_reg_name */
-host_reg_name:
-    /* RFC 3986 Section 3.2.2 states       reg-name    = *( unreserved / pct-encoded / sub-delims )  */
-    while(cursor < end && reg_name_chars[*cursor])
-        ++cursor;
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&host_reg_name;
-        return cursor;
-    }
-    req->host_end = cursor;
-    goto host_end; 
-    /* Experiment with moving ip_literal logic before and after host_end */
-host_ip_literal:
-    /* We only really need to support IPv6 literals. IPvFuture doesn't really exist. IPv4 is handled as a regular host_reg_name */
-    while(cursor < end && ip_literal_chars[*cursor])
-        ++cursor;
-    if(unlikely(*cursor != ']'))
-    {
-        *err_code = LS_ERR_BAD_REQUEST;
-        return NULL;
-    }
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&host_ip_literal;
-        return cursor;
-    }
-    ++cursor;
-    req->host_end = cursor;
-host_end:
-    if(*cursor == ':')
-    {
-        req->port_start = ++cursor;
-        goto port;
-    } 
-    /* Anything beyond this point is basically the path */
-    /* Here we handle all cases of absolute form but a path-rootless (I can't see any use cases and neither does nginx it seems) */
-    if(*cursor == '/')
-    {
-        /* absolute form && ( (path-abempty && not empty) || path-absolute) */
-        req->path_start = cursor;
-        cursor++;
-        goto after_slash_in_path;
-    }
-    if(*cursor == '?')
-    {
-        /* asbolute form && (path-empty || (path-abempty && empty))  */
-        req->query_start = ++cursor;
-        goto handle_query;
-    }
-    if(*cursor == ' ')
-    {
-        goto http_version;
-    }
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&host_end;
-        return cursor;
-    }
-    *err_code = LS_ERR_BAD_REQUEST;
-    return NULL;
-port:
-    while(cursor < end && *cursor >= '0' && *cursor <= '9') 
-        ++cursor; 
-    req->port_end = cursor;
-    /* Anything beyond this point is basically the path */
-    /* Here we handle all cases of absolute form but a path-rootless (I can't see any use cases and neither does nginx it seems) */
-    if(*cursor == '/')
-    {
-        /* absolute form && ( (path-abempty && not empty) || path-absolute) */
-        req->path_start = cursor;
-        cursor++;
-        goto after_slash_in_path;
-    }
-    if(*cursor == '?')
-    {
-        /* asbolute form && (path-empty || (path-abempty && empty))  */
-        req->query_start = ++cursor;
-        goto handle_query;
-    }
-    if(*cursor == ' ')
-    {
-        ++cursor;
-        goto http_version;
-    }
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&port;
-        return cursor;
-    }
-after_slash_in_path:
-    /* Our path is basically just this now:   *( "/" segment ) */
-    /* we either have a ? to start a query or a space to finish path and move onto version*/
-    cursor = parse_path(cursor, end, req);  // parse_path is inline, fast, register-only
-    if(cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* Swapping this from host_end (wrong) to after_slash_in_path decreases speed by LOTS*/
-        *state = &&after_slash_in_path;
-        return cursor;
-    }
-    req->path_end = cursor; 
-    if(*cursor == '?')
-    {
-        /* asbolute form && (path-empty || (path-abempty && empty))  */
-        req->query_start = ++cursor;
-        goto handle_query;
-    }
-    if(*cursor == ' ')
-    {
-        req->version_start = ++cursor;
-        goto http_version;
-    }
-    *err_code = LS_ERR_BAD_REQUEST;
-    return NULL;
-handle_query:
-    /* RFC 3986 Section 3.4 states  " query = *( pchar / "/" / "?" ) "  */
-    while(cursor < end && (pchar_chars[*cursor] || *cursor == '/' || *cursor == '?'))
-        cursor++;
-    req->query_end = cursor;
-    /* Query should be last part of request-target */
-    if(*cursor == ' ')
-    {
-        req->version_start = ++cursor;
-        goto http_version;
-    }
-    if (cursor >= end)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&handle_query;
-        return cursor;
-    }
-    *err_code = LS_ERR_BAD_REQUEST;
-    return NULL;
-http_version:
-    /*min now:  "HTTP/x.y\n\n\0" so min of end-cursor = 10 */
-    if(end-cursor < 10)
-    {
-        *err_code = LS_ERR_NEED_MORE_CHARS;
-        *state = &&http_version;
-        return cursor;
-    }
-    if(likely(P(cursor) == LS_CHAR4_INT('H', 'T', 'T', 'P')))
-    {
-        /* We have enough clearance in this section from check at start to ensure we don't go out of bounds */
-        cursor+=4;
-        if(unlikely(*cursor != '/'))
-        {
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL;
-        }
-        ++cursor;
-        req->http_major = *cursor - '0';
-        if(req->http_major > 9)
-        {
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL;
-        }
-        ++cursor;
-        if(unlikely(*cursor != '.'))
-        {
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL;
-        }
-        ++cursor;
-        req->http_minor = *cursor - '0';
-        if(req->http_minor > 9)
-        {
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL;
-        }
-        goto end_of_request_line;
-    }
-end_of_request_line:
-    /* To get to end_of_request_line we come from http_version, assume minimum size check so have enough clearance for incrementation here*/
-    if(*cursor == '\r')
-    {
-        ++cursor;
-        if(likely(*cursor == '\n'))
-        {
-            ++cursor;
-            goto done;
-        }
-        if (cursor >= end)
-        {
-            *err_code = LS_ERR_NEED_MORE_CHARS;
-            *state = &&end_of_request_line;
-            return cursor - 1;
-        }
-    }
-    if(*cursor == '\n')
-    {
-        /* Send me \r\n if you aren't stupid but I am nice */
-        ++cursor;
-        goto done;
-    }
-    *err_code = LS_ERR_BAD_REQUEST;
-    return NULL;
-done:
     return cursor;
 }
 
-/** Need more thorough benchmarking between these to compare which is better, I told chatGPT to rewrite _op1
- * identically but instead of taking in pointer to pointer to label we take in pointer to an integer and we use a switch case
- * statement at the start to determine where we goto. Don't trust chatGPT because it NEVER listens so will have to check if safe if use this one further.
- * At surface level benchmarking it appears _op1 performs minimally better but its very close so hard to say for definite
- * Also there could definitely be differences between these in speed if the request line is sent in multiple chunks.
-*/
-const u_char* parse_request_line_op2(const u_char* cursor,
-                                     const u_char* end,
-                                     http_request* req,
-                                     int* err_code,
-                                     int* state)  // changed from void* to int enum
-{
-    // Resume point based on enum state
-    if(state)
-    {
-        switch(*state)
-        {
-            case LS_HTTP_CUSTOM_HTTP_METHOD: goto custom_http_method;
-            case LS_HTTP_SPACE_AFTER_METHOD: goto space_after_method;
-            case LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE: goto figure_out_req_target_type;
-            case LS_HTTP_SCHEMA: goto schema;
-            case LS_HTTP_SCHEMA_SLASH: goto schema_slash;
-            case LS_HTTP_SCHEMA_SLASH_SLASH: goto schema_slash_slash;
-            case LS_HTTP_HOST_START: goto host_start;
-            case LS_HTTP_HOST_REG_NAME: goto host_reg_name;
-            case LS_HTTP_HOST_IP_LITERAL: goto host_ip_literal;
-            case LS_HTTP_HOST_END: goto host_end;
-            case LS_HTTP_PORT: goto port;
-            case LS_HTTP_AFTER_SLASH_IN_PATH: goto after_slash_in_path;
-            case LS_HTTP_HANDLE_QUERY: goto handle_query;
-            case LS_HTTP_VERSION: goto http_version;
-            case LS_HTTP_END_OF_REQUEST_LINE: goto end_of_request_line;
-            default: break; // LS_HTTP_METHOD or 0 -> start from top
-        }
-    }
+/* === Implementation of parsing functions === */
 
+const u_char* parse_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
     /**
      * The shortest HTTP request is: "GET / HTTP/1.1\n\n" which is 16 characters long if we allow \n instead of \r\n.
      * The max amount we check for a method is 8 so we can check this condition to ensure the request is valid and all methods can be safely checked. 
-     * Without testing I think it is also unlikely that we would read() less than 8 bytes of a request to start with but I am not sure. 
+     * Without testing I think it is also unlikely that we would read less than 8 bytes of a request to start with which is why I think this is a good optimisation but I can't benchmark this
+     * until I get my webserver up and running better
      */
-    if (unlikely(cursor + 8 >= end))
-    {
+    if(unlikely(cursor + 8 >= end)) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         return cursor;
     }
-
-
-    /* HTTP method */
     /* Fast track for GET and POST which are by far the most common methods */
-    if(likely(P(cursor) == LS_CHAR4_INT('G', 'E', 'T', ' ')))
-    {
+    if(likely(P(cursor) == LS_CHAR4_INT('G','E','T',' '))) {
         req->method = LS_HTTP_GET;
         cursor += 4;
-        goto figure_out_req_target_type;
-    }
-    else if(likely(P(cursor) == LS_CHAR4_INT('P', 'O', 'S', 'T')))
-    {
+        *state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
+        return cursor;
+    } else if(likely(P(cursor) == LS_CHAR4_INT('P','O','S','T'))) {
         req->method = LS_HTTP_POST;
         cursor += 4;
-        goto space_after_method;
-    }
-    else
-    {
+        *state = LS_HTTP_SPACE_AFTER_METHOD;
+        return cursor;
+    } else {
         /* Handle the more uncommon methods */
-        switch (P(cursor))
+        switch(P(cursor)) 
         {
-        case LS_CHAR4_INT('P', 'U', 'T', ' '):
-            req->method = LS_HTTP_PUT;
-            cursor += 4; 
-            goto figure_out_req_target_type;
-        case LS_CHAR4_INT('H', 'E', 'A', 'D'):
-            req->method = LS_HTTP_HEAD;
-            cursor += 4;
-            goto space_after_method;
-        case LS_CHAR4_INT('D', 'E', 'L', 'E'):
-            if (likely(*(cursor + 4) == 'T' && *(cursor + 5) == 'E'))
-            {
-                req->method = LS_HTTP_DELETE;
-                cursor += 6;
-                goto space_after_method;
-            }
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL; 
-        case LS_CHAR4_INT('C', 'O', 'N', 'N'):
-            if (likely(P(cursor + 4) == LS_CHAR4_INT('E', 'C', 'T', ' ')))
-            {
-                req->method = LS_HTTP_CONNECT;
-                cursor += 8;
-                req->host_start = cursor;
-                goto host_start;
-            }
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL; 
-        case LS_CHAR4_INT('O', 'P', 'T', 'I'):
-            if (likely(P(cursor + 4) == LS_CHAR4_INT('O', 'N', 'S', ' ')))
-            {
-                req->method = LS_HTTP_OPTIONS;
-                cursor += 8;
-                goto figure_out_req_target_type;
-            }
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL; 
-        case LS_CHAR4_INT('T', 'R', 'A', 'C'):
-            if (likely(*(cursor + 4) == 'E'))
-            {
-                req->method = LS_HTTP_TRACE;
-                cursor += 5;
-                goto space_after_method;
-            }
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL; 
-        default:
-            /* Allow customised http methods */
-            req->method_start = cursor;
-        custom_http_method:
-            while(cursor < end && method_chars[*cursor])
-                ++cursor;
-            if(cursor >= end)
-            {
-                *err_code = LS_ERR_NEED_MORE_CHARS;
-                *state = LS_HTTP_CUSTOM_HTTP_METHOD;
+            case LS_CHAR4_INT('P','U','T',' '):
+                req->method = LS_HTTP_PUT;
+                cursor += 4;
+                *state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
                 return cursor;
-            }
-            if(*cursor != ' ')
-            {
+            case LS_CHAR4_INT('H','E','A','D'):
+                req->method = LS_HTTP_HEAD;
+                cursor += 4;
+                *state = LS_HTTP_SPACE_AFTER_METHOD;
+                return cursor;
+            case LS_CHAR4_INT('D','E','L','E'):
+                if(*(cursor+4)=='T' && *(cursor+5)=='E') {
+                    req->method = LS_HTTP_DELETE;
+                    cursor += 6;
+                    *state = LS_HTTP_SPACE_AFTER_METHOD;
+                    return cursor;
+                }
                 *err_code = LS_ERR_BAD_REQUEST;
                 return NULL;
-            }
-            goto figure_out_req_target_type;
+            case LS_CHAR4_INT('C','O','N','N'):
+                if(P(cursor+4) == LS_CHAR4_INT('E','C','T',' ')) {
+                    req->method = LS_HTTP_CONNECT;
+                    cursor += 8;
+                    req->host_start = cursor;
+                    *state = LS_HTTP_HOST_START;
+                    return cursor;
+                }
+                *err_code = LS_ERR_BAD_REQUEST;
+                return NULL;
+            case LS_CHAR4_INT('O','P','T','I'):
+                if(P(cursor+4) == LS_CHAR4_INT('O','N','S',' ')) {
+                    req->method = LS_HTTP_OPTIONS;
+                    cursor += 8;
+                    *state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
+                    return cursor;
+                }
+                *err_code = LS_ERR_BAD_REQUEST;
+                return NULL;
+            case LS_CHAR4_INT('T','R','A','C'):
+                if(*(cursor+4)=='E') {
+                    req->method = LS_HTTP_TRACE;
+                    cursor += 5;
+                    *state = LS_HTTP_SPACE_AFTER_METHOD;
+                    return cursor;
+                }
+                *err_code = LS_ERR_BAD_REQUEST;
+                return NULL;
+            default:
+                req->method_start = cursor;
+                *state = LS_HTTP_CUSTOM_HTTP_METHOD;
+                return cursor;
         }
     }
-space_after_method:
-    /* Skip the space after the method */
-    if(cursor >= end)
-    {
+}
+
+const u_char* parse_custom_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    while(cursor < end && method_chars[*cursor])
+        ++cursor;
+    if(cursor >= end) {
+        *err_code = LS_ERR_NEED_MORE_CHARS;
+        *state = LS_HTTP_CUSTOM_HTTP_METHOD;
+        return cursor;
+    }
+    if(*cursor != ' ') {
+        *err_code = LS_ERR_BAD_REQUEST;
+        return NULL;
+    }
+    *state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
+    return cursor;
+}
+
+const u_char* parse_space_after_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    if(unlikely(*cursor != ' ')) {
+        *err_code = LS_ERR_BAD_REQUEST;
+        return NULL;
+    }
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_SPACE_AFTER_METHOD;
         return cursor;
     }
-    if(unlikely(*cursor != ' '))
-    {
-        *err_code = LS_ERR_BAD_REQUEST;
-        return NULL;
-    }
     ++cursor;
-    /* Fall down */
-figure_out_req_target_type:
-    if(*cursor == '/')
-    {
-        req->path_start = cursor;
-        /* We can still be sure we have clearance from the first check before method */
-        ++cursor;
-        goto after_slash_in_path; /* Origin form request follows this path */
-    } 
+    *state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
+    return cursor;
+}
 
-    /* OR with 0x20 converts upper to lower and keeps lower, lower */
-    /* a <= ch <= z   ->   0 <= ch - 'a' <= 'z' - 'a' */
-    /* if ch - 'a' is negative it underflows it will always go larger than 'z' - 'a' anyway */
-    if((*cursor | 0x20) - 'a' <= 'z' - 'a'){ goto schema; } /* Absolute form request follows this parth*/
-    if(cursor >= end)
-    {
+const u_char* parse_req_target_type(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
         return cursor;
     }
+    if(*cursor == '/') {
+        req->path_start = cursor;
+        ++cursor;
+        *state = LS_HTTP_AFTER_SLASH_IN_PATH;
+        return cursor;
+    }
+    /* OR with 0x20 converts upper to lower and keeps lower, lower */
+    /* a <= ch <= z   ->   0 <= ch - 'a' <= 'z' - 'a' */
+    /* if ch - 'a' is negative it underflows it will always go larger than 'z' - 'a' anyway */
+    if(((*cursor | 0x20) - 'a') <= 'z'-'a') {
+        *state = LS_HTTP_SCHEMA;
+        return cursor;
+    }
     *err_code = LS_ERR_BAD_REQUEST;
     return NULL;
-schema:
+}
+
+/* --- schema parsing --- */
+const u_char* parse_schema(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
     req->schema_start = cursor;
-    while(cursor < end && schema_chars[*cursor])
-        ++cursor;
-    if(likely(*cursor == ':'))
-    {
-        req->schema_end = cursor;
-        ++cursor;
-        goto schema_slash;
+    while(cursor < end && schema_chars[*cursor]) ++cursor;
+    if(likely(*cursor == ':')) {
+        req->schema_end = cursor++;
+        *state = LS_HTTP_SCHEMA_SLASH;
+        return cursor;
     }
-    if(cursor >= end)
-    {
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_SCHEMA;
         return cursor;
     }
     *err_code = LS_ERR_BAD_REQUEST;
     return NULL;
-schema_slash:
-    if(likely(*cursor == '/'))
-    {
+}
+
+const u_char* parse_schema_slash(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    if(likely(*cursor == '/')) {
         ++cursor;
-        goto schema_slash_slash;
+        *state = LS_HTTP_SCHEMA_SLASH_SLASH;
+        return cursor;
     }
-    if(cursor >= end)
-    {
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_SCHEMA_SLASH;
         return cursor;
     }
     *err_code = LS_ERR_BAD_REQUEST;
     return NULL;
-schema_slash_slash:
-    if(likely(*cursor == '/'))
-    {
+}
+
+const u_char* parse_schema_slash_slash(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    if(likely(*cursor == '/')) {
         ++cursor;
-        goto host_start;
+        *state = LS_HTTP_HOST_START;
+        return cursor;
     }
-    if(cursor >= end)
-    {
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_SCHEMA_SLASH_SLASH;
         return cursor;
     }
     *err_code = LS_ERR_BAD_REQUEST;
     return NULL;
-host_start:
+}
+
+/* --- host parsing --- */
+const u_char* parse_host_start(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
     /* RFC 3986 Section 3.2.2 states       host = IP-literal / IPv4address / reg-name                */
     /* I let IPv4 be processed as reg_name as reg_name can contain digits and '.'        */
     req->host_start = cursor;
-    if(unlikely(*cursor == '['))
-    {
+    if(unlikely(*cursor=='[')) {
         ++cursor;
-        goto host_ip_literal;
+        *state = LS_HTTP_HOST_IP_LITERAL;
+        return cursor;
     }
-    if(cursor >= end)
-    {
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_HOST_START;
         return cursor;
     }
-    /* Fall through to host_reg_name */
-host_reg_name:
+    *state = LS_HTTP_HOST_REG_NAME;
+    return cursor;
+}
+
+const u_char* parse_host_reg_name(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
     /* RFC 3986 Section 3.2.2 states       reg-name    = *( unreserved / pct-encoded / sub-delims )  */
-    while(cursor < end && reg_name_chars[*cursor])
-        ++cursor;
-    if(cursor >= end)
-    {
+    while(cursor < end && reg_name_chars[*cursor]) ++cursor;
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_HOST_REG_NAME;
         return cursor;
     }
     req->host_end = cursor;
-    goto host_end; 
-    /* Experiment with moving ip_literal logic before and after host_end */
-host_ip_literal:
+    *state = LS_HTTP_HOST_END;
+    return cursor;
+}
+
+const u_char* parse_host_ip_literal(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
     /* We only really need to support IPv6 literals. IPvFuture doesn't really exist. IPv4 is handled as a regular host_reg_name */
-    while(cursor < end && ip_literal_chars[*cursor])
-        ++cursor;
-    if(unlikely(*cursor != ']'))
-    {
+    while(cursor < end && ip_literal_chars[*cursor]) ++cursor;
+    if(unlikely(*cursor != ']')) {
         *err_code = LS_ERR_BAD_REQUEST;
         return NULL;
     }
-    if(cursor >= end)
-    {
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_HOST_IP_LITERAL;
         return cursor;
     }
     ++cursor;
     req->host_end = cursor;
-host_end:
-    if(*cursor == ':')
-    {
+    *state = LS_HTTP_HOST_END;
+    return cursor;
+}
+
+const u_char* parse_host_end(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    if(*cursor == ':') {
         req->port_start = ++cursor;
-        goto port;
-    } 
-    /* Anything beyond this point is basically the path */
-    /* Here we handle all cases of absolute form but a path-rootless (I can't see any use cases and neither does nginx it seems) */
-    if(*cursor == '/')
-    {
-        /* absolute form && ( (path-abempty && not empty) || path-absolute) */
-        req->path_start = cursor;
-        cursor++;
-        goto after_slash_in_path;
+        *state = LS_HTTP_PORT;
+        return cursor;
     }
-    if(*cursor == '?')
-    {
+
+    /* Here we handle all cases of absolute form but a path-rootless (I can't see any use cases and neither does nginx it seems) */
+    if(*cursor == '/') {
+        /* absolute form && ( (path-abempty && not empty) || path-absolute) */
+        req->path_start = cursor++;
+        *state = LS_HTTP_AFTER_SLASH_IN_PATH;
+        return cursor;
+    }
+    if(*cursor == '?') {
         /* asbolute form && (path-empty || (path-abempty && empty))  */
         req->query_start = ++cursor;
-        goto handle_query;
+        *state = LS_HTTP_HANDLE_QUERY;
+        return cursor;
     }
-    if(*cursor == ' ')
-    {
-        goto http_version;
+    if(*cursor == ' ') {
+        *state = LS_HTTP_VERSION;
+        return ++cursor;
     }
-    if(cursor >= end)
-    {
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_HOST_END;
         return cursor;
     }
     *err_code = LS_ERR_BAD_REQUEST;
     return NULL;
-port:
-    while(cursor < end && *cursor >= '0' && *cursor <= '9') 
-        ++cursor; 
+}
+
+/* --- port parsing --- */
+const u_char* parse_port(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    while(cursor < end && *cursor >= '0' && *cursor <= '9') ++cursor;
     req->port_end = cursor;
-    /* Anything beyond this point is basically the path */
-    /* Here we handle all cases of absolute form but a path-rootless (I can't see any use cases and neither does nginx it seems) */
-    if(*cursor == '/')
-    {
-        /* absolute form && ( (path-abempty && not empty) || path-absolute) */
-        req->path_start = cursor;
-        cursor++;
-        goto after_slash_in_path;
+
+    if(*cursor == '/') {
+        req->path_start = cursor++;
+        *state = LS_HTTP_AFTER_SLASH_IN_PATH;
+        return cursor;
     }
-    if(*cursor == '?')
-    {
-        /* asbolute form && (path-empty || (path-abempty && empty))  */
+    if(*cursor == '?') {
         req->query_start = ++cursor;
-        goto handle_query;
+        *state = LS_HTTP_HANDLE_QUERY;
+        return cursor;
     }
-    if(*cursor == ' ')
-    {
+    if(*cursor == ' ') {
         ++cursor;
-        goto http_version;
+        *state = LS_HTTP_VERSION;
+        return cursor;
     }
-    if(cursor >= end)
-    {
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_PORT;
         return cursor;
     }
-after_slash_in_path:
-    /* Our path is basically just this now:   *( "/" segment ) */
-    /* we either have a ? to start a query or a space to finish path and move onto version*/
-    cursor = parse_path(cursor, end, req);  // parse_path is inline, fast, register-only
-    if(cursor >= end)
-    {
+    *err_code = LS_ERR_BAD_REQUEST;
+    return NULL;
+}
+
+/* --- path parsing --- */
+const u_char* parse_after_slash_in_path(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    while(cursor < end && path_chars[*cursor])
+        ++cursor;
+
+    req->path_end = cursor;
+
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* ATTENTION ATTENTION ATTENTION ATTENTION */
-        /* Swapping this from host_end (wrong) to after_slash_in_path decreases speed by LOTS*/
         *state = LS_HTTP_AFTER_SLASH_IN_PATH;
         return cursor;
     }
-    req->path_end = cursor; 
-    if(*cursor == '?')
-    {
-        /* asbolute form && (path-empty || (path-abempty && empty))  */
+    req->path_end = cursor;
+
+    if(*cursor == '?') {
         req->query_start = ++cursor;
-        goto handle_query;
+        *state = LS_HTTP_HANDLE_QUERY;
+        return cursor;
     }
-    if(*cursor == ' ')
-    {
+    if(*cursor == ' ') {
         req->version_start = ++cursor;
-        goto http_version;
+        *state = LS_HTTP_VERSION;
+        return cursor;
     }
     *err_code = LS_ERR_BAD_REQUEST;
     return NULL;
-handle_query:
+}
+
+/* --- query parsing --- */
+const u_char* parse_handle_query(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
     /* RFC 3986 Section 3.4 states  " query = *( pchar / "/" / "?" ) "  */
-    while(cursor < end && (pchar_chars[*cursor] || *cursor == '/' || *cursor == '?'))
-        cursor++;
+    while(cursor < end && (pchar_chars[*cursor] || *cursor=='/' || *cursor=='?')) ++cursor;
     req->query_end = cursor;
     /* Query should be last part of request-target */
-    if(*cursor == ' ')
-    {
+    if(*cursor == ' ') {
         req->version_start = ++cursor;
-        goto http_version;
+        *state = LS_HTTP_VERSION;
+        return cursor;
     }
-    if (cursor >= end)
-    {
+    if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_HANDLE_QUERY;
         return cursor;
     }
     *err_code = LS_ERR_BAD_REQUEST;
     return NULL;
-http_version:
+}
+
+/* --- HTTP version parsing --- */
+const u_char* parse_http_version(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+
     /*min now:  "HTTP/x.y\n\n\0" so min of end-cursor = 10 */
-    if(end-cursor < 10)
-    {
+    if(end - cursor < 10) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
         *state = LS_HTTP_VERSION;
         return cursor;
     }
-    if(likely(P(cursor) == LS_CHAR4_INT('H', 'T', 'T', 'P')))
-    {
+
+    if(likely(P(cursor) == LS_CHAR4_INT('H','T','T','P'))) {
         /* We have enough clearance in this section from check at start to ensure we don't go out of bounds */
-        cursor+=4;
-        if(unlikely(*cursor != '/'))
-        {
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL;
-        }
+        cursor += 4;
+        if(unlikely(*cursor != '/')) { *err_code = LS_ERR_BAD_REQUEST; return NULL; }
         ++cursor;
         req->http_major = *cursor - '0';
-        if(req->http_major > 9)
-        {
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL;
-        }
+        if(req->http_major > 9) { *err_code = LS_ERR_BAD_REQUEST; return NULL; }
         ++cursor;
-        if(unlikely(*cursor != '.'))
-        {
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL;
-        }
+        if(unlikely(*cursor != '.')) { *err_code = LS_ERR_BAD_REQUEST; return NULL; }
         ++cursor;
         req->http_minor = *cursor - '0';
-        if(req->http_minor > 9)
-        {
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL;
-        }
-        goto end_of_request_line;
-    }
-end_of_request_line:
-    /* To get to end_of_request_line we come from http_version, assume minimum size check so have enough clearance for incrementation here*/
-    if(*cursor == '\r')
-    {
-        ++cursor;
-        if(likely(*cursor == '\n'))
-        {
-            ++cursor;
-            goto done;
-        }
-        if (cursor >= end)
-        {
-            *err_code = LS_ERR_NEED_MORE_CHARS;
-            *state = LS_HTTP_END_OF_REQUEST_LINE; 
-            return cursor - 1;
-        }
-    }
-    if(*cursor == '\n')
-    {
-        /* Send me \r\n if you aren't stupid but I am nice */
-        ++cursor;
-        goto done;
+        if(req->http_minor > 9) { *err_code = LS_ERR_BAD_REQUEST; return NULL; }
+        *state = LS_HTTP_END_OF_REQUEST_LINE;
+        return ++cursor;
     }
     *err_code = LS_ERR_BAD_REQUEST;
     return NULL;
-done:
-    return cursor;
 }
+
+/* --- end-of-line parsing --- */
+const u_char* parse_end_of_request_line(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    if(*cursor == '\r') {
+        ++cursor;
+        if(likely(*cursor == '\n')) {
+            ++cursor;
+            *state = LS_HTTP_END_OF_REQUEST_LINE;
+            return cursor;
+        }
+        if(cursor >= end) {
+            *err_code = LS_ERR_NEED_MORE_CHARS;
+            *state = LS_HTTP_END_OF_REQUEST_LINE;
+            return cursor-1;
+        }
+    }
+    if(*cursor == '\n') {
+        ++cursor;
+        *state = LS_HTTP_END_OF_REQUEST_LINE;
+        return cursor;
+    }
+    *err_code = LS_ERR_BAD_REQUEST;
+    return NULL;
+}
+
+
+
 
 // Research of URI parsing:
 /* RFC 9112 Section 3.2 states       " request-target = origin-form / absolute-form / authority-form / asterisk-form "          */
@@ -1057,5 +655,3 @@ done:
 
 /* MAYBE JUST ALLOW ANY unreserved, resered of pct-encoded*/
 /* Maybe just allow any VCHAR */
-
-

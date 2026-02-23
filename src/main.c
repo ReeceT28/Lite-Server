@@ -126,7 +126,8 @@ void test_request_parse()
     const u_char* cursor = req.raw_request;
     void *parser_state = NULL;
     int state = 0;
-    cursor = parse_request_line_op2(cursor, end, &req, &err_code, &state);
+    cursor = parse_request_line(cursor, end, &req, &err_code, &state);
+    if(req.method == LS_HTTP_OPTIONS) option_count++;
 #else
 #endif
 }
@@ -175,29 +176,29 @@ const char* test_requests[] = {
     "GET /complex/path/?a=1&b=2&c=3 HTTP/2.0\r\n\r\n"
 };
 
-//int main() {
-//    size_t n_requests = sizeof(test_requests)/sizeof(test_requests[0]);
-//    for(size_t i = 0; i < n_requests; ++i) {
-//        http_request req;
-//        memset(&req, 0, sizeof(req));
-//        req.raw_request = (const u_char*)test_requests[i];
-//        req.request_len = strlen(test_requests[i]);
-//        req.http_major = 67;
-//        req.http_minor = 67;
-//        req.header_count = 0;
-//        int err_code;
-//        req.header_count = 0;
-//        const u_char *end = req.raw_request + req.request_len;
-//        const u_char *cursor = req.raw_request;
-//        void *parser_state = NULL;
-//        int state = 0;
-//        cursor = parse_request_line_op3(cursor, end, &req, &err_code, &state);
-//        print_parsed_request(&req);
-//        printf("--------------------------------------------------\n");
-//    }
-//    return 0;
-//}
-//
+int testFunc() {
+    size_t n_requests = sizeof(test_requests)/sizeof(test_requests[0]);
+    for(size_t i = 0; i < n_requests; ++i) {
+        http_request req;
+        memset(&req, 0, sizeof(req));
+        req.raw_request = (const u_char*)test_requests[i];
+        req.request_len = strlen(test_requests[i]);
+        req.http_major = 67;
+        req.http_minor = 67;
+        req.header_count = 0;
+        int err_code;
+        req.header_count = 0;
+        const u_char *end = req.raw_request + req.request_len;
+        const u_char *cursor = req.raw_request;
+        void *parser_state = NULL;
+        int state = 0;
+        cursor = parse_request_line(cursor, end, &req, &err_code, &state);
+        print_parsed_request(&req);
+        printf("--------------------------------------------------\n");
+    }
+    return 0;
+}
+
 
 
 
@@ -205,6 +206,7 @@ const char* test_requests[] = {
 
 int main()
 {
+
     const int num_tests = 1;
     const int num_iterations = 5000000;
 
@@ -217,7 +219,7 @@ int main()
             count++;
         }
     }
-
+    printf("OPTION COUNT: %ld \n", option_count);
     // printf("Option count: %zu", option_count);
     return 0;
 }
