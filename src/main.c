@@ -115,20 +115,20 @@ size_t option_count = 0;
 
 void test_request_parse()
 {
+#if 1
     http_request req;
-    lite_server_config *conf;
     int err_code;
 
     req.raw_request = (const u_char*)http_requests[count % 100];
     req.request_len = strlen((const char*)req.raw_request);
     req.header_count = 0;
+    const u_char* end = req.raw_request + req.request_len;
     const u_char* cursor = req.raw_request;
-    const u_char* end = cursor + req.request_len;
-    cursor = parse_request_line_op1(cursor, end, &req, conf, &err_code);
-    if(req.method == LS_HTTP_OPTIONS)
-    {
-        option_count++;
-    }
+    void *parser_state = NULL;
+    int state = 0;
+    cursor = parse_request_line_op2(cursor, end, &req, &err_code, &state);
+#else
+#endif
 }
 
 // Example: simple print function for parsed HTTP request
@@ -175,52 +175,53 @@ const char* test_requests[] = {
     "GET /complex/path/?a=1&b=2&c=3 HTTP/2.0\r\n\r\n"
 };
 
-int main() {
-    size_t n_requests = sizeof(test_requests)/sizeof(test_requests[0]);
-    for(size_t i = 0; i < n_requests; ++i) {
-        http_request req;
-        memset(&req, 0, sizeof(req));
-        req.raw_request = (const u_char*)test_requests[i];
-        req.request_len = strlen(test_requests[i]);
-        req.http_major = 67;
-        req.http_minor = 67;
-        req.header_count = 0;
-        const u_char *cursor = req.raw_request;
-        const u_char *end = cursor + req.request_len;
-        lite_server_config *conf;
-        int err_code;
-        cursor = parse_request_line_op1(cursor, end, &req, conf, &err_code);
-
-        print_parsed_request(&req);
-        printf("--------------------------------------------------\n");
-    }
-    return 0;
-}
-
-
-
-
-
-
-//int main()
-//{
-//    const int num_tests = 1;
-//    const int num_iterations = 5000000;
-//
-//    for (int i = 0; i < num_tests; ++i)
-//    {
-//        count = 0;
-//        for (int j = 0; j < num_iterations; ++j)
-//        {
-//            test_request_parse();
-//            count++;
-//        }
+//int main() {
+//    size_t n_requests = sizeof(test_requests)/sizeof(test_requests[0]);
+//    for(size_t i = 0; i < n_requests; ++i) {
+//        http_request req;
+//        memset(&req, 0, sizeof(req));
+//        req.raw_request = (const u_char*)test_requests[i];
+//        req.request_len = strlen(test_requests[i]);
+//        req.http_major = 67;
+//        req.http_minor = 67;
+//        req.header_count = 0;
+//        int err_code;
+//        req.header_count = 0;
+//        const u_char *end = req.raw_request + req.request_len;
+//        const u_char *cursor = req.raw_request;
+//        void *parser_state = NULL;
+//        int state = 0;
+//        cursor = parse_request_line_op3(cursor, end, &req, &err_code, &state);
+//        print_parsed_request(&req);
+//        printf("--------------------------------------------------\n");
 //    }
-//
-//    // printf("Option count: %zu", option_count);
 //    return 0;
 //}
 //
+
+
+
+
+
+int main()
+{
+    const int num_tests = 1;
+    const int num_iterations = 5000000;
+
+    for (int i = 0; i < num_tests; ++i)
+    {
+        count = 0;
+        for (int j = 0; j < num_iterations; ++j)
+        {
+            test_request_parse();
+            count++;
+        }
+    }
+
+    // printf("Option count: %zu", option_count);
+    return 0;
+}
+
 
 
 

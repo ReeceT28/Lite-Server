@@ -137,7 +137,8 @@ enum {
     LS_HTTP_TRACE,
     LS_HTTP_DELETE,
     LS_HTTP_CONNECT,
-    LS_HTTP_OPTIONS
+    LS_HTTP_OPTIONS,
+    LS_HTTP_UNRECOGNISED_METHOD
 };
 
 /**
@@ -147,7 +148,27 @@ enum {
  */
 enum {
     LS_ERR_BAD_REQUEST,
-    LS_ERR_NOT_IMPLEMENTED
+    LS_ERR_NOT_IMPLEMENTED,
+    LS_ERR_NEED_MORE_CHARS
+};
+
+enum{
+    LS_HTTP_METHOD,
+    LS_HTTP_CUSTOM_HTTP_METHOD,
+    LS_HTTP_SPACE_AFTER_METHOD,
+    LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE,
+    LS_HTTP_SCHEMA,
+    LS_HTTP_SCHEMA_SLASH,
+    LS_HTTP_SCHEMA_SLASH_SLASH,
+    LS_HTTP_HOST_START,
+    LS_HTTP_HOST_REG_NAME,
+    LS_HTTP_HOST_IP_LITERAL,
+    LS_HTTP_HOST_END,
+    LS_HTTP_PORT,
+    LS_HTTP_AFTER_SLASH_IN_PATH,
+    LS_HTTP_HANDLE_QUERY,
+    LS_HTTP_VERSION,
+    LS_HTTP_END_OF_REQUEST_LINE
 };
 
 /*
@@ -156,6 +177,8 @@ enum {
 typedef struct
 {
     int method;
+    const u_char* method_start;
+    const u_char* method_end;
     const u_char* schema_start;
     const u_char* schema_end;
     const u_char* host_start;
@@ -179,15 +202,14 @@ typedef struct
 
 void parse_request(http_request* req, int* err_code, const lite_server_config* lt_config);
 
-const u_char* parse_request_line_op1(const u_char* cursor, const u_char* end, http_request* req,
-    const lite_server_config* ls_config, int* err_code);
+const u_char* parse_request_line_op1(const u_char* cursor, const u_char* end, http_request* req, int* err_code, void** state);
 
-const u_char* parse_request_line_op2(const u_char* cursor, const u_char* end, http_request* req,
-    const lite_server_config* ls_config, int* );
+const u_char* parse_request_line_op2(const u_char* cursor,
+                                     const u_char* end,
+                                     http_request* req,
+                                     int* err_code,
+                                     int* state);  // changed from void* to int enum
 
-const u_char* parse_request_line_op3(const u_char* cursor, const u_char* end, http_request* req,
-    const lite_server_config* ls_config, int* err_code);
-    
 ///**
 // * @brief Skip a block of OWS as defined in RFC 9110 Section 5.6.3.
 // * Skips a block of Optional White Space (OWS) which is defined in RFC 9110 Section 5.6.3. 
