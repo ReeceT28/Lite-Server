@@ -1,2 +1,4 @@
 # Doxygen output
 html/
+build/
+build-tests/

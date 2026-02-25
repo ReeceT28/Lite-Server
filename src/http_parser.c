@@ -140,69 +140,9 @@ static const u_char ip_literal_chars[256] = {
     /* Can add more if want support for IPvFuture */
 };
 
-
-
-/** Theory of parser:
- * - Finite state machine parsers sometimes use for loops to iterate the cursor (like nginx). 
- * - They have a switch-case statement which is evaluated at the start of the for loop to determine the current state.
- * - When trying this approach I found it was quite slow (although it is possible this was my own fault).
- * - I decided to use an approach utilising goto to jump to the correct next place in the code and keep track of the state of the parser.
- * - I prefer this for a few reasons:
- * 1. I found the for loop and switch case statement a bit hard to follow as there is a lot of jumping around +- a few hundred lines of code.
- * 2. The catch statement has to be evaluated EVERY time the cursor is iterated - could add quite a lot of overhead.
- * 
- * A lot of people don't like goto but I don't know why. I think its use is justified here and in lower-level/ optimised programming. 
- * I would assume JMP is a very common assembly instruction so why avoid its equivalent in C.
- * end points to a null terminator so is safe to dereference and I take advantage of that at points.
- */
-/* Array of function pointers indexed by LS_HTTP_* enum */
-parse_func parse_jump_table[] = {
-    parse_method,                // LS_HTTP_METHOD
-    parse_custom_method,         // LS_HTTP_CUSTOM_HTTP_METHOD
-    parse_space_after_method,    // LS_HTTP_SPACE_AFTER_METHOD
-    parse_req_target_type,       // LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE
-    parse_schema,                // LS_HTTP_SCHEMA
-    parse_schema_slash,          // LS_HTTP_SCHEMA_SLASH
-    parse_schema_slash_slash,    // LS_HTTP_SCHEMA_SLASH_SLASH
-    parse_host_start,            // LS_HTTP_HOST_START
-    parse_host_reg_name,         // LS_HTTP_HOST_REG_NAME
-    parse_host_ip_literal,       // LS_HTTP_HOST_IP_LITERAL
-    parse_host_end,              // LS_HTTP_HOST_END
-    parse_port,                  // LS_HTTP_PORT
-    parse_after_slash_in_path,   // LS_HTTP_AFTER_SLASH_IN_PATH
-    parse_handle_query,          // LS_HTTP_HANDLE_QUERY
-    parse_http_version,          // LS_HTTP_VERSION
-    parse_end_of_request_line    // LS_HTTP_END_OF_REQUEST_LINE
-};
-
-const u_char* parse_request_line(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
-{
-    if (!state) return NULL;
-
-    while (1) {
-        if (*state < 0 || *state >= sizeof(parse_jump_table)/sizeof(parse_jump_table[0]))
-            return NULL;
-
-        const u_char* next = parse_jump_table[*state](cursor, end, req, err_code, state);
-        if (!next) return NULL;
-
-        // If parser tells us to pause (need more chars), return immediately
-        if (*err_code == LS_ERR_NEED_MORE_CHARS)
-            return next;
-
-        cursor = next;
-
-        // End of request line
-        if (*state == LS_HTTP_END_OF_REQUEST_LINE)
-            break;
-    }
-
-    return cursor;
-}
-
 /* === Implementation of parsing functions === */
 
-const u_char* parse_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     /**
      * The shortest HTTP request is: "GET / HTTP/1.1\n\n" which is 16 characters long if we allow \n instead of \r\n.
@@ -284,7 +224,7 @@ const u_char* parse_method(const u_char* cursor, const u_char* end, http_request
     }
 }
 
-const u_char* parse_custom_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_custom_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     while(cursor < end && method_chars[*cursor])
         ++cursor;
@@ -298,10 +238,11 @@ const u_char* parse_custom_method(const u_char* cursor, const u_char* end, http_
         return NULL;
     }
     *state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
+    req->method_end = cursor;
     return cursor;
 }
 
-const u_char* parse_space_after_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_space_after_method(const u_char* cursor, const u_char* end, int* err_code, int* state)
 {
     if(unlikely(*cursor != ' ')) {
         *err_code = LS_ERR_BAD_REQUEST;
@@ -317,7 +258,7 @@ const u_char* parse_space_after_method(const u_char* cursor, const u_char* end, 
     return cursor;
 }
 
-const u_char* parse_req_target_type(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_req_target_type(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
@@ -342,7 +283,7 @@ const u_char* parse_req_target_type(const u_char* cursor, const u_char* end, htt
 }
 
 /* --- schema parsing --- */
-const u_char* parse_schema(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_schema(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     req->schema_start = cursor;
     while(cursor < end && schema_chars[*cursor]) ++cursor;
@@ -360,7 +301,7 @@ const u_char* parse_schema(const u_char* cursor, const u_char* end, http_request
     return NULL;
 }
 
-const u_char* parse_schema_slash(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_schema_slash(const u_char* cursor, const u_char* end, int* err_code, int* state)
 {
     if(likely(*cursor == '/')) {
         ++cursor;
@@ -376,7 +317,7 @@ const u_char* parse_schema_slash(const u_char* cursor, const u_char* end, http_r
     return NULL;
 }
 
-const u_char* parse_schema_slash_slash(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_schema_slash_slash(const u_char* cursor, const u_char* end, int* err_code, int* state)
 {
     if(likely(*cursor == '/')) {
         ++cursor;
@@ -393,7 +334,7 @@ const u_char* parse_schema_slash_slash(const u_char* cursor, const u_char* end, 
 }
 
 /* --- host parsing --- */
-const u_char* parse_host_start(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_host_start(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     /* RFC 3986 Section 3.2.2 states       host = IP-literal / IPv4address / reg-name                */
     /* I let IPv4 be processed as reg_name as reg_name can contain digits and '.'        */
@@ -412,7 +353,7 @@ const u_char* parse_host_start(const u_char* cursor, const u_char* end, http_req
     return cursor;
 }
 
-const u_char* parse_host_reg_name(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_host_reg_name(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     /* RFC 3986 Section 3.2.2 states       reg-name    = *( unreserved / pct-encoded / sub-delims )  */
     while(cursor < end && reg_name_chars[*cursor]) ++cursor;
@@ -426,7 +367,7 @@ const u_char* parse_host_reg_name(const u_char* cursor, const u_char* end, http_
     return cursor;
 }
 
-const u_char* parse_host_ip_literal(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_host_ip_literal(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     /* We only really need to support IPv6 literals. IPvFuture doesn't really exist. IPv4 is handled as a regular host_reg_name */
     while(cursor < end && ip_literal_chars[*cursor]) ++cursor;
@@ -445,7 +386,7 @@ const u_char* parse_host_ip_literal(const u_char* cursor, const u_char* end, htt
     return cursor;
 }
 
-const u_char* parse_host_end(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_host_end(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     if(*cursor == ':') {
         req->port_start = ++cursor;
@@ -480,7 +421,7 @@ const u_char* parse_host_end(const u_char* cursor, const u_char* end, http_reque
 }
 
 /* --- port parsing --- */
-const u_char* parse_port(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_port(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     while(cursor < end && *cursor >= '0' && *cursor <= '9') ++cursor;
     req->port_end = cursor;
@@ -510,7 +451,7 @@ const u_char* parse_port(const u_char* cursor, const u_char* end, http_request* 
 }
 
 /* --- path parsing --- */
-const u_char* parse_after_slash_in_path(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_after_slash_in_path(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     while(cursor < end && path_chars[*cursor])
         ++cursor;
@@ -539,7 +480,7 @@ const u_char* parse_after_slash_in_path(const u_char* cursor, const u_char* end,
 }
 
 /* --- query parsing --- */
-const u_char* parse_handle_query(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_handle_query(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
     /* RFC 3986 Section 3.4 states  " query = *( pchar / "/" / "?" ) "  */
     while(cursor < end && (pchar_chars[*cursor] || *cursor=='/' || *cursor=='?')) ++cursor;
@@ -560,7 +501,7 @@ const u_char* parse_handle_query(const u_char* cursor, const u_char* end, http_r
 }
 
 /* --- HTTP version parsing --- */
-const u_char* parse_http_version(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_http_version(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
 {
 
     /*min now:  "HTTP/x.y\n\n\0" so min of end-cursor = 10 */
@@ -590,7 +531,7 @@ const u_char* parse_http_version(const u_char* cursor, const u_char* end, http_r
 }
 
 /* --- end-of-line parsing --- */
-const u_char* parse_end_of_request_line(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_end_of_request_line(const u_char* cursor, const u_char* end, int* err_code, int* state)
 {
     if(*cursor == '\r') {
         ++cursor;
@@ -614,7 +555,98 @@ const u_char* parse_end_of_request_line(const u_char* cursor, const u_char* end,
     return NULL;
 }
 
+const u_char* parse_request_line(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+{
+    if (!state) return NULL;
 
+    while (1) {
+        const u_char* next = NULL;
+
+        switch (*state) {
+
+            case LS_HTTP_METHOD:
+                next = parse_method(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_CUSTOM_HTTP_METHOD:
+                next = parse_custom_method(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_SPACE_AFTER_METHOD:
+                next = parse_space_after_method(cursor, end, err_code, state);
+                break;
+
+            case LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE:
+                next = parse_req_target_type(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_SCHEMA:
+                next = parse_schema(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_SCHEMA_SLASH:
+                next = parse_schema_slash(cursor, end, err_code, state);
+                break;
+
+            case LS_HTTP_SCHEMA_SLASH_SLASH:
+                next = parse_schema_slash_slash(cursor, end, err_code, state);
+                break;
+
+            case LS_HTTP_HOST_START:
+                next = parse_host_start(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_HOST_REG_NAME:
+                next = parse_host_reg_name(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_HOST_IP_LITERAL:
+                next = parse_host_ip_literal(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_HOST_END:
+                next = parse_host_end(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_PORT:
+                next = parse_port(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_AFTER_SLASH_IN_PATH:
+                next = parse_after_slash_in_path(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_HANDLE_QUERY:
+                next = parse_handle_query(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_VERSION:
+                next = parse_http_version(cursor, end, req, err_code, state);
+                break;
+
+            case LS_HTTP_END_OF_REQUEST_LINE:
+                next = parse_end_of_request_line(cursor, end, err_code, state);
+                break;
+
+            default:
+                return NULL;
+        }
+
+        if (!next)
+            return NULL;
+
+        if (*err_code == LS_ERR_NEED_MORE_CHARS)
+            return next;
+
+        cursor = next;
+
+        /* End of request line */
+        if (*state == LS_HTTP_END_OF_REQUEST_LINE)
+            break;
+    }
+
+    return cursor;
+}
 
 
 // Research of URI parsing:
@@ -655,3 +687,4 @@ const u_char* parse_end_of_request_line(const u_char* cursor, const u_char* end,
 
 /* MAYBE JUST ALLOW ANY unreserved, resered of pct-encoded*/
 /* Maybe just allow any VCHAR */
+

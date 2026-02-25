@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <memory.h>
 #include "server_config.h"
+#include "ls_types.h"
 
 #if defined(__GNUC__) || defined(__clang__)
 #define likely(x)   (__builtin_expect(!!(x), 1))
@@ -12,12 +13,6 @@
 #define likely(x)   (x)
 #define unlikely(x) (x)
 #endif
-
-#define SEND_BUF_SIZE 4096
-#define MAX_REQUEST_HEADERS 16
-#define MAX_LEADING_CRLF 6
-#define IS_OWS(c) (c == ' ' || c == '\t')
-
 
 #if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
     #define LT_LITTLE_ENDIAN 1
@@ -58,9 +53,6 @@
     #error "Cannot determine endian-ness for this architecture"
 #endif
 
-typedef unsigned char u_char;
-
-
 
 enum {
     LS_HTTP_GET,
@@ -85,7 +77,7 @@ enum {
     LS_ERR_NEED_MORE_CHARS
 };
 
-enum{
+enum {
     LS_HTTP_METHOD,
     LS_HTTP_CUSTOM_HTTP_METHOD,
     LS_HTTP_SPACE_AFTER_METHOD,
@@ -104,64 +96,9 @@ enum{
     LS_HTTP_END_OF_REQUEST_LINE
 };
 
-/** 
- * @brief Represents a HTTP header, used for http requests.
- */
-typedef struct
-{
-    const u_char* name;     /**<  Name of header */
-    size_t name_len;      /**<  Length of name string */
-    const u_char* value;    /**< Value of header */
-    size_t value_len;     /**< Length of value string */
-} request_header;
-
-/*
- * @brief represents a HTTP request.
- */
-typedef struct
-{
-    int method;
-    const u_char* method_start;
-    const u_char* method_end;
-    const u_char* schema_start;
-    const u_char* schema_end;
-    const u_char* host_start;
-    const u_char* host_end;
-    const u_char* port_start;
-    const u_char* port_end;
-    const u_char* query_start;
-    const u_char* query_end;
-    const u_char* path_start;                                  /**< Path of the request */
-    const u_char* path_end;                                   /**< Length of the path string */
-    const u_char* version_start;                               /**<  The HTTP version */
-    const u_char* version_end;                                /**< Length of the version string */
-    request_header headers[MAX_REQUEST_HEADERS];       /**< Array of request_headers */
-    size_t header_count;                               /**< Number of headers currently in array */
-    const u_char* raw_request;                           /**< Pointer to original raw request */
-    size_t request_len;                                /**< Length of the original request */
-    unsigned int http_minor;
-    unsigned int http_major;
-} http_request;
 
 
 
-typedef const u_char* (*parse_func)(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
 
 /* REQUEST LINE FUNCTIONS */
-const u_char* parse_request_line        (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_method              (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_custom_method       (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_space_after_method  (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_req_target_type     (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_schema              (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_schema_slash        (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_schema_slash_slash  (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_host_start          (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_host_reg_name       (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_host_ip_literal     (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_host_end            (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_port                (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_after_slash_in_path (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_handle_query        (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_http_version        (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
-const u_char* parse_end_of_request_line (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
+inline const u_char* parse_request_line        (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);

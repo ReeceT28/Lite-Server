@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 #include "http_parser.h"
+#include "ls_hash.h"
 
 const char *http_requests[100] = {
     "GET /home HTTP/1.1",
@@ -206,7 +207,6 @@ int testFunc() {
 
 int main()
 {
-
     const int num_tests = 1;
     const int num_iterations = 5000000;
 
