@@ -1,26 +1,32 @@
 #include <memory.h>
+#include "ls_hash.h"
+#include "ls_http_request.h"
 #include "server_config.h"
 #include "http_parser.h"
+#include "ls_trie.h"
+#include <stdint.h>
+#include <stddef.h>
+
+#if defined(__SSE2__)
+    #include <emmintrin.h>   
+    #define LS_HAS_SSE2 1
+#else 
+    #define LS_HAS_SSE2 0
+#endif
 
 #if (LS_IS_LITTLE_ENDIAN)
-
     #define LS_CHAR4_INT(a, b, c, d)					\
     	 ((d << 24) | (c << 16) | (b << 8) | a)
-
     #define LS_CHAR8_INT(a, b, c, d, e, f, g, h)				\
     	 (((long)h << 56) | ((long)g << 48) | ((long)f << 40)		\
     	  | ((long)e << 32) | (d << 24) | (c << 16) | (b << 8) | a)
-
 #else
-
     #define LS_CHAR4_INT(a,b,c,d) \
         ((a << 24) | (b << 16) | (c << 8) | (d))
-
     #define LS_CHAR8_INT(a,b,c,d,e,f,g,h) \
         (((long)(a) << 56) | ((long)(b) << 48) | \
          ((long)(c) << 40) | ((long)(d) << 32) | \
          ((e) << 24) | ((f) << 16) | ((g) << 8) | (h))
-
 #endif
 
 static inline unsigned int P(const u_char* p)
@@ -32,6 +38,7 @@ static inline unsigned int P(const u_char* p)
 		    ((unsigned int)((p)[2]) << 16) | ((unsigned int)((p)[3]) << 24));
 #endif
 }
+
 
 /* RFC 3986 Section 3.1 states " scheme = ALPHA * ( ALPHA / DIGIT / "+" / "-" / "." ) "  */
 /* This syntax doesn't work in all C compilers but just use GCC */
@@ -49,6 +56,7 @@ static const u_char method_chars[256] = {
     ['_'] = 1,
     ['-'] = 1,
 };
+
 /* RFC 3986 Section 3.2.2 states       reg-name    = *( unreserved / pct-encoded / sub-delims )  */
 static const u_char reg_name_chars[256] = {
     /* unreserved: */
@@ -140,9 +148,34 @@ static const u_char ip_literal_chars[256] = {
     /* Can add more if want support for IPvFuture */
 };
 
-/* === Implementation of parsing functions === */
+static const unsigned char header_chars[256] = {
+    /* Uppercase maps to lowercase */
+    ['A'] = 'a', ['B'] = 'b', ['C'] = 'c', ['D'] = 'd',
+    ['E'] = 'e', ['F'] = 'f', ['G'] = 'g', ['H'] = 'h',
+    ['I'] = 'i', ['J'] = 'j', ['K'] = 'k', ['L'] = 'l',
+    ['M'] = 'm', ['N'] = 'n', ['O'] = 'o', ['P'] = 'p',
+    ['Q'] = 'q', ['R'] = 'r', ['S'] = 's', ['T'] = 't',
+    ['U'] = 'u', ['V'] = 'v', ['W'] = 'w', ['X'] = 'x',
+    ['Y'] = 'y', ['Z'] = 'z',
+    /* Lowercase map to themselves */ 
+    ['a'] = 'a', ['b'] = 'b', ['c'] = 'c', ['d'] = 'd',
+    ['e'] = 'e', ['f'] = 'f', ['g'] = 'g', ['h'] = 'h',
+    ['i'] = 'i', ['j'] = 'j', ['k'] = 'k', ['l'] = 'l',
+    ['m'] = 'm', ['n'] = 'n', ['o'] = 'o', ['p'] = 'p',
+    ['q'] = 'q', ['r'] = 'r', ['s'] = 's', ['t'] = 't',
+    ['u'] = 'u', ['v'] = 'v', ['w'] = 'w', ['x'] = 'x',
+    ['y'] = 'y', ['z'] = 'z',
+    /* Digits map to themselves */
+    ['0'] = '0', ['1'] = '1', ['2'] = '2', ['3'] = '3',
+    ['4'] = '4', ['5'] = '5', ['6'] = '6', ['7'] = '7',
+    ['8'] = '8', ['9'] = '9',
+    /* Dash maps to itself */
+    ['-'] = '-', 
+};
 
-static inline const u_char* parse_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+/* === Start of funtions for the request line  === */
+
+static inline const u_char* parse_method(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     /**
      * The shortest HTTP request is: "GET / HTTP/1.1\n\n" which is 16 characters long if we allow \n instead of \r\n.
@@ -224,7 +257,7 @@ static inline const u_char* parse_method(const u_char* cursor, const u_char* end
     }
 }
 
-static inline const u_char* parse_custom_method(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_custom_method(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     while(cursor < end && method_chars[*cursor])
         ++cursor;
@@ -258,7 +291,7 @@ static inline const u_char* parse_space_after_method(const u_char* cursor, const
     return cursor;
 }
 
-static inline const u_char* parse_req_target_type(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_req_target_type(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     if(cursor >= end) {
         *err_code = LS_ERR_NEED_MORE_CHARS;
@@ -283,7 +316,7 @@ static inline const u_char* parse_req_target_type(const u_char* cursor, const u_
 }
 
 /* --- schema parsing --- */
-static inline const u_char* parse_schema(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_schema(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     req->schema_start = cursor;
     while(cursor < end && schema_chars[*cursor]) ++cursor;
@@ -334,7 +367,7 @@ static inline const u_char* parse_schema_slash_slash(const u_char* cursor, const
 }
 
 /* --- host parsing --- */
-static inline const u_char* parse_host_start(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_host_start(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     /* RFC 3986 Section 3.2.2 states       host = IP-literal / IPv4address / reg-name                */
     /* I let IPv4 be processed as reg_name as reg_name can contain digits and '.'        */
@@ -353,7 +386,7 @@ static inline const u_char* parse_host_start(const u_char* cursor, const u_char*
     return cursor;
 }
 
-static inline const u_char* parse_host_reg_name(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_host_reg_name(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     /* RFC 3986 Section 3.2.2 states       reg-name    = *( unreserved / pct-encoded / sub-delims )  */
     while(cursor < end && reg_name_chars[*cursor]) ++cursor;
@@ -367,7 +400,7 @@ static inline const u_char* parse_host_reg_name(const u_char* cursor, const u_ch
     return cursor;
 }
 
-static inline const u_char* parse_host_ip_literal(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_host_ip_literal(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     /* We only really need to support IPv6 literals. IPvFuture doesn't really exist. IPv4 is handled as a regular host_reg_name */
     while(cursor < end && ip_literal_chars[*cursor]) ++cursor;
@@ -386,7 +419,7 @@ static inline const u_char* parse_host_ip_literal(const u_char* cursor, const u_
     return cursor;
 }
 
-static inline const u_char* parse_host_end(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_host_end(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     if(*cursor == ':') {
         req->port_start = ++cursor;
@@ -421,7 +454,7 @@ static inline const u_char* parse_host_end(const u_char* cursor, const u_char* e
 }
 
 /* --- port parsing --- */
-static inline const u_char* parse_port(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_port(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     while(cursor < end && *cursor >= '0' && *cursor <= '9') ++cursor;
     req->port_end = cursor;
@@ -451,7 +484,7 @@ static inline const u_char* parse_port(const u_char* cursor, const u_char* end, 
 }
 
 /* --- path parsing --- */
-static inline const u_char* parse_after_slash_in_path(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_after_slash_in_path(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     while(cursor < end && path_chars[*cursor])
         ++cursor;
@@ -480,7 +513,7 @@ static inline const u_char* parse_after_slash_in_path(const u_char* cursor, cons
 }
 
 /* --- query parsing --- */
-static inline const u_char* parse_handle_query(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_handle_query(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     /* RFC 3986 Section 3.4 states  " query = *( pchar / "/" / "?" ) "  */
     while(cursor < end && (pchar_chars[*cursor] || *cursor=='/' || *cursor=='?')) ++cursor;
@@ -501,7 +534,7 @@ static inline const u_char* parse_handle_query(const u_char* cursor, const u_cha
 }
 
 /* --- HTTP version parsing --- */
-static inline const u_char* parse_http_version(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+static inline const u_char* parse_http_version(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
 
     /*min now:  "HTTP/x.y\n\n\0" so min of end-cursor = 10 */
@@ -536,118 +569,314 @@ static inline const u_char* parse_end_of_request_line(const u_char* cursor, cons
     if(*cursor == '\r') {
         ++cursor;
         if(likely(*cursor == '\n')) {
+            /* In the event that cursor = end after this increment it will be caught when parsing headers and ask for more chars*/
             ++cursor;
-            *state = LS_HTTP_END_OF_REQUEST_LINE;
+            *state = LS_HTTP_REQ_LINE_DONE;
             return cursor;
         }
         if(cursor >= end) {
             *err_code = LS_ERR_NEED_MORE_CHARS;
-            *state = LS_HTTP_END_OF_REQUEST_LINE;
             return cursor-1;
         }
     }
     if(*cursor == '\n') {
         ++cursor;
-        *state = LS_HTTP_END_OF_REQUEST_LINE;
+        *state = LS_HTTP_REQ_LINE_DONE;
         return cursor;
     }
     *err_code = LS_ERR_BAD_REQUEST;
     return NULL;
 }
 
-const u_char* parse_request_line(const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state)
+const u_char* parse_request_line(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
 {
     if (!state) return NULL;
-
     while (1) {
         const u_char* next = NULL;
-
         switch (*state) {
-
             case LS_HTTP_METHOD:
                 next = parse_method(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_CUSTOM_HTTP_METHOD:
                 next = parse_custom_method(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_SPACE_AFTER_METHOD:
                 next = parse_space_after_method(cursor, end, err_code, state);
                 break;
-
             case LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE:
                 next = parse_req_target_type(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_SCHEMA:
                 next = parse_schema(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_SCHEMA_SLASH:
                 next = parse_schema_slash(cursor, end, err_code, state);
                 break;
-
             case LS_HTTP_SCHEMA_SLASH_SLASH:
                 next = parse_schema_slash_slash(cursor, end, err_code, state);
                 break;
-
             case LS_HTTP_HOST_START:
                 next = parse_host_start(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_HOST_REG_NAME:
                 next = parse_host_reg_name(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_HOST_IP_LITERAL:
                 next = parse_host_ip_literal(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_HOST_END:
                 next = parse_host_end(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_PORT:
                 next = parse_port(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_AFTER_SLASH_IN_PATH:
                 next = parse_after_slash_in_path(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_HANDLE_QUERY:
                 next = parse_handle_query(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_VERSION:
                 next = parse_http_version(cursor, end, req, err_code, state);
                 break;
-
             case LS_HTTP_END_OF_REQUEST_LINE:
                 next = parse_end_of_request_line(cursor, end, err_code, state);
+                if (*state == LS_HTTP_REQ_LINE_DONE) {
+                    cursor = next;
+                    goto done;
+                }
                 break;
-
             default:
                 return NULL;
         }
-
         if (!next)
+        {
             return NULL;
+        }
 
         if (*err_code == LS_ERR_NEED_MORE_CHARS)
             return next;
 
         cursor = next;
-
-        /* End of request line */
-        if (*state == LS_HTTP_END_OF_REQUEST_LINE)
-            break;
     }
-
+done:
     return cursor;
 }
 
+/* === End of funtions for the request line  === */
+
+/* === Start of funtions for the header lines  === */
+
+static ls_trie_node_t* global_header_trie_root = NULL;
+
+void ls_http_parser_init()
+{
+    global_header_trie_root = ls_http_init_header_trie();
+}
+
+static inline const u_char* parse_header_name(const u_char* cursor, const u_char* end, ls_http_request_t* req,
+    int* err_code, int* state)
+{
+    while (cursor < end) {
+
+        u_char c = header_chars[*cursor];
+
+        /* Header name finished */
+        if(!c) {
+            if (likely(*cursor == ':'))
+            {
+                if (likely(req->current_trie_node != NULL)) {
+                    req->header_id = req->current_trie_node->header_id;
+                }
+                else {
+                    req->header_id = LS_HTTP_HDR_UNKOWN;
+                }
+                *state = LS_HTTP_OWS_BEFORE_VALUE;
+                req->header_name_end = cursor;
+                return cursor + 1; /* move past ':' */
+            }
+            *err_code = LS_ERR_BAD_REQUEST;
+            return NULL;
+        }
+        if (req->current_trie_node) {
+            req->current_trie_node = req->current_trie_node->children[c-45];
+        }
+
+        ++cursor;
+    }
+
+    *err_code = LS_ERR_NEED_MORE_CHARS;
+    return cursor;
+}
+
+static const u_char* parse_header_name_hash_v2(const u_char* cursor, const u_char* end, ls_http_request_t* req,
+    int* err_code, int* state)
+{
+    while (cursor < end) {
+
+        u_char c = header_chars[*cursor];
+
+        if (!c) {
+            if (*cursor == ':') {
+                size_t len = cursor - req->header_name_start;
+                req->header_name_end = cursor;
+
+                req->header_id = ls_hdr_hash_lookup(
+                    req->header_name_start,
+                    len,
+                    req->header_hash);
+
+                *state = LS_HTTP_OWS_BEFORE_VALUE;
+                return ++cursor;
+            }
+            *err_code = LS_ERR_BAD_REQUEST;
+            return NULL;
+        }
+
+        req->header_hash = ((req->header_hash<<5) + req->header_hash) ^ c;
+
+        cursor++;
+    }
+
+    *err_code = LS_ERR_NEED_MORE_CHARS;
+    return cursor;
+}
+
+static inline const u_char* parse_ows(const u_char* cursor, const u_char* end, ls_http_request_t* req,
+    int* err_code, int* state)
+{
+    while(cursor < end && (*cursor == ' ' || *cursor == '\t'))
+        ++cursor;
+    if(cursor >= end)
+    {
+        *err_code = LS_ERR_NEED_MORE_CHARS;
+        return cursor;
+    }
+    req->header_value_start = cursor; 
+    *state = LS_HTTP_HEADER_VALUE;
+    return cursor;
+}
+
+static inline const u_char* parse_header_value(const u_char* cursor, const u_char* end, ls_http_request_t* req,
+    int* err_code, int* state)
+{
+    while(cursor < end) {
+        if(*cursor > 'r') {
+            ++cursor;
+            continue;
+        }
+        if(*cursor == '\r') {
+            req->header_value_end = cursor;
+            ++cursor;
+            if(*cursor == '\n') {
+                *state = LS_HTTP_STRIP_VALUE_OWS;
+                return cursor;
+            }
+            if(cursor >= end) {
+                *err_code = LS_ERR_NEED_MORE_CHARS;
+                return cursor-1;
+            }
+        }
+        else if(*cursor == '\n') { 
+            req->header_value_end = cursor;
+            *state = LS_HTTP_STRIP_VALUE_OWS;
+            return cursor;
+        }
+        else if(*cursor == '\0') {
+            *err_code = LS_ERR_BAD_REQUEST;
+            return NULL;
+        }
+        ++cursor;
+    }
+    *err_code = LS_ERR_NEED_MORE_CHARS;
+    return cursor;
+}
+
+static inline void strip_value_ows(ls_http_request_t* req)
+{
+    /* End points to the position after the actual end so \r or \n so reduce by 1 */
+    const u_char* curr_end = req->header_value_end - 1;
+    while(curr_end > req->raw_request && (*curr_end == ' ' || *curr_end == '\t'))
+        --curr_end;
+    req->header_value_end = curr_end + 1;
+
+}
+
+static inline const u_char* parse_header_line( const u_char* cursor, const u_char* end, ls_http_request_t* req,
+    int* err_code, int* state)
+{
+    while (1) {
+        const u_char* next = NULL;
+        switch (*state) {
+            case LS_HTTP_HEADER_NAME:
+                next = parse_header_name(cursor, end, req, err_code, state);
+                break;
+            case LS_HTTP_OWS_BEFORE_VALUE:
+                next = parse_ows(cursor, end, req, err_code, state);
+                break;
+            case LS_HTTP_HEADER_VALUE:
+                next = parse_header_value(cursor, end, req, err_code, state);
+                break;
+            case LS_HTTP_STRIP_VALUE_OWS:
+                strip_value_ows(req);
+                goto done;
+            default:
+                return NULL;
+        }
+        if (!next) {
+            return NULL;
+        }
+        if (*err_code == LS_ERR_NEED_MORE_CHARS)
+            return next;
+        cursor = next;
+    }
+done:
+    /* Cursor will be pointing to \n so move on 1 to go to next header line */
+    return ++cursor;
+}
+
+const u_char* parse_header_lines(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state)
+{
+    /* If user wants to add their own header/field name then we can add it to the trie.
+     * this can be done at runtime as well so wouldn't require recompilation  */
+    while(1) {
+        req->header_name_start = cursor;
+        req->current_trie_node = global_header_trie_root;
+        // req->header_hash = 0;
+        cursor = parse_header_line(cursor, end, req, err_code, state);
+        if(!store_header(req)) {
+            return NULL;
+        }
+        if(*err_code != LS_ERR_OKAY) {
+            return NULL;
+        }
+        if(*cursor == '\r') {
+            if(*(++cursor) == '\n') {
+                return cursor;
+            }
+            *err_code = LS_ERR_BAD_REQUEST;
+            return NULL;
+        }
+        if(*cursor == '\n') {
+            return cursor;
+        }
+        *state = LS_HTTP_HEADER_NAME;
+    }
+}
+
+/* === End of functions for the header lines === */
+const u_char* ls_http_parse_request(const u_char *cursor, const u_char *end, ls_http_request_t* req,
+    int *err_code, int *state)
+{
+    cursor = parse_request_line(cursor, end, req, err_code, state);
+    if(!cursor) {
+        return NULL;
+    }
+    *state = LS_HTTP_HEADER_NAME;
+    cursor = parse_header_lines(cursor, end, req, err_code, state);
+    // parse_header_lines(cursor, end, req, err_code, state);
+    return cursor;
+}
 
 // Research of URI parsing:
 /* RFC 9112 Section 3.2 states       " request-target = origin-form / absolute-form / authority-form / asterisk-form "          */

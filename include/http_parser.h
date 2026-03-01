@@ -7,11 +7,11 @@
 #include "ls_types.h"
 
 #if defined(__GNUC__) || defined(__clang__)
-#define likely(x)   (__builtin_expect(!!(x), 1))
-#define unlikely(x) (__builtin_expect(!!(x), 0))
+    #define likely(x)   (__builtin_expect((x), 1))
+    #define unlikely(x) (__builtin_expect((x), 0))
 #else
-#define likely(x)   (x)
-#define unlikely(x) (x)
+    #define likely(x)   (x)
+    #define unlikely(x) (x)
 #endif
 
 #if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
@@ -20,12 +20,7 @@
     #define LT_LITTLE_ENDIAN 0
 #endif
 
-
 /*
- * Possible advantages of unaligned memory access:
- * - Could allow faster checking of equivalence of strings like methods seen in nginx source code
- * Possible disadvantages of unaligned memory access:
- * - Can have performance penalties, will need to benchmark to test 
  * Notes:
  * - Linux has a Kconfig option called HAVE_EFFICIENT_UNALIGNED_ACCESS.
  * - This indicates if a platform can perform unaligned memory accesses efficieintly, I will use the same criteria as this flag.
@@ -38,8 +33,7 @@
  * - i386
 */
 
-#if defined(__i386__)     || \
-    defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
     #define LS_HAVE_EFFICIENT_UNALIGNED_ACCESS 1
 #else
     #define LS_HAVE_EFFICIENT_UNALIGNED_ACCESS 0
@@ -52,7 +46,6 @@
 #else
     #error "Cannot determine endian-ness for this architecture"
 #endif
-
 
 enum {
     LS_HTTP_GET,
@@ -72,6 +65,7 @@ enum {
  * 
  */
 enum {
+    LS_ERR_OKAY,
     LS_ERR_BAD_REQUEST,
     LS_ERR_NOT_IMPLEMENTED,
     LS_ERR_NEED_MORE_CHARS
@@ -93,12 +87,26 @@ enum {
     LS_HTTP_AFTER_SLASH_IN_PATH,
     LS_HTTP_HANDLE_QUERY,
     LS_HTTP_VERSION,
-    LS_HTTP_END_OF_REQUEST_LINE
+    LS_HTTP_END_OF_REQUEST_LINE,
+    LS_HTTP_REQ_LINE_DONE
 };
 
+enum {
+    LS_HTTP_HEADER_NAME,
+    LS_HTTP_OWS_BEFORE_VALUE,
+    LS_HTTP_HEADER_VALUE,
+    LS_HTTP_STRIP_VALUE_OWS,
+    LS_HTTP_END_OF_HEADERS
+};
 
+const u_char* parse_request_line(const u_char* cursor, const u_char* end, ls_http_request_t* req, 
+    int* err_code, int* state);
 
+const u_char* ls_http_parse_request(const u_char* cursor, const u_char* end, ls_http_request_t* req,
+    int* err_code, int* state);
 
+const u_char* parse_header_lines(const u_char *cursor, const u_char *end, ls_http_request_t* req,
+    int *err_code, int* state);
 
-/* REQUEST LINE FUNCTIONS */
-inline const u_char* parse_request_line        (const u_char* cursor, const u_char* end, http_request* req, int* err_code, int* state);
+    
+void ls_http_parser_init();

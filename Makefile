@@ -1,6 +1,7 @@
 # Compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c17 -O3 -I./include
+# remember -g for debugging
+CFLAGS = -Wall -Wextra -std=c17 -Ofast -march=native -flto -I./include
 
 # Directories
 SRC_DIR = src
