@@ -81,5 +81,4 @@ typedef struct {
 } ls_http_request_t;
 
 int store_header(ls_http_request_t *req);
-
 typedef int (*ls_http_header_handler_ptr)(ls_http_request_t* req);

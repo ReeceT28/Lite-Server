@@ -1,4 +1,5 @@
 #include "ls_http_request.h"
+
 int store_header(ls_http_request_t *req)
 {
     if (req->header_count >= req->header_capacity) {

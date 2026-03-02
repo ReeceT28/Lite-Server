@@ -1,9 +1,7 @@
 #pragma once
-#include <stdlib.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <memory.h>
-#include "server_config.h"
+#include "ls_http_request.h"
 #include "ls_types.h"
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -32,7 +30,6 @@
  * - x86/64
  * - i386
 */
-
 #if defined(__i386__) || defined(__x86_64__)
     #define LS_HAVE_EFFICIENT_UNALIGNED_ACCESS 1
 #else
@@ -71,6 +68,7 @@ enum {
     LS_ERR_NEED_MORE_CHARS
 };
 
+/* Possible states during the parsing of the request line */
 enum {
     LS_HTTP_METHOD,
     LS_HTTP_CUSTOM_HTTP_METHOD,
@@ -91,6 +89,7 @@ enum {
     LS_HTTP_REQ_LINE_DONE
 };
 
+/* Possible states during the parsing of a header line */
 enum {
     LS_HTTP_HEADER_NAME,
     LS_HTTP_OWS_BEFORE_VALUE,
@@ -99,14 +98,7 @@ enum {
     LS_HTTP_END_OF_HEADERS
 };
 
-const u_char* parse_request_line(const u_char* cursor, const u_char* end, ls_http_request_t* req, 
-    int* err_code, int* state);
-
-const u_char* ls_http_parse_request(const u_char* cursor, const u_char* end, ls_http_request_t* req,
-    int* err_code, int* state);
-
-const u_char* parse_header_lines(const u_char *cursor, const u_char *end, ls_http_request_t* req,
-    int *err_code, int* state);
-
-    
 void ls_http_parser_init();
+const u_char* parse_request_line(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state);
+const u_char* parse_header_lines(const u_char *cursor, const u_char *end, ls_http_request_t* req, int *err_code, int* state);
+const u_char* ls_http_parse_request(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state);

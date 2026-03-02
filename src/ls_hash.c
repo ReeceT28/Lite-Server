@@ -4,33 +4,6 @@
 #include "ls_http_request.h"
 #include "ls_hash.h"
 
-/* Some common headers for benchmarking */
-static const char *common_http_request_headers[] = {
-    "Host",
-    "Connection",
-    "User-Agent",
-    "Accept",
-    "Accept-Encoding",
-    "Accept-Language",
-    "Upgrade-Insecure-Requests",
-    "Sec-Fetch-Site",
-    "Sec-Fetch-Mode",
-    "Sec-Fetch-Dest",
-    "Sec-Fetch-User",
-    "Sec-CH-UA",
-    "Sec-CH-UA-Mobile",
-    "Sec-CH-UA-Platform",
-    "Cookie",
-    "Referer",
-    "Origin",
-    "Content-Type",
-    "Content-Length",
-    "Authorization"
-};
-
-static const size_t common_http_request_headers_count =
-    sizeof(common_http_request_headers) / sizeof(common_http_request_headers[0]);
-
 #define LS_HDR_HASH_TABLE_SIZE 64
 static ls_hdr_hash_entry_t header_hash_table[LS_HDR_HASH_TABLE_SIZE];
 
@@ -59,9 +32,7 @@ static void ls_hdr_hash_insert(const char* name, int header_id)
     // printf("Index of %s is: %d\n", name, idx);
 }
 /* Assume perfect hash table */
-int ls_hdr_hash_lookup(const u_char *start,
-                       size_t len,
-                       unsigned long hash)
+int ls_hdr_hash_lookup( unsigned long hash)
 {
     unsigned idx = hash & (LS_HDR_HASH_TABLE_SIZE - 1);
     ls_hdr_hash_entry_t *e = &header_hash_table[idx];
@@ -87,3 +58,39 @@ void ls_http_init_header_hash(void)
     ls_hdr_hash_insert("keep-alive",       LS_HTTP_HDR_KEEP_ALIVE);
     ls_hdr_hash_insert("authorization",    LS_HTTP_HDR_AUTHORIZATION);
 }
+
+// static const u_char* parse_header_name_hash_v2( const u_char* cursor, const u_char* end, ls_http_request_t* req,
+//     int* err_code, int* state)
+// {
+//     while (cursor < end) {
+//         u_char c = header_chars[*cursor];
+// 
+//         if (!c) {
+//             if (*cursor == ':') {
+//                 size_t len = cursor - req->header_name_start;
+//                 req->header_name_end = cursor;
+// 
+//                 // finalize CRC32
+//                 req->header_hash ^= 0xFFFFFFFF;
+// 
+//                 req->header_id = ls_hdr_hash_lookup(
+//                     req->header_name_start,
+//                     len,
+//                     req->header_hash);
+// 
+//                 *state = LS_HTTP_OWS_BEFORE_VALUE;
+//                 return ++cursor;
+//             }
+// 
+//             *err_code = LS_ERR_BAD_REQUEST;
+//             return NULL;
+//         }
+// 
+//         req->header_hash = _mm_crc32_u8(req->header_hash, c);
+// 
+//         cursor++;
+//     }
+// 
+//     *err_code = LS_ERR_NEED_MORE_CHARS;
+//     return cursor;
+// }

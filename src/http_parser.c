@@ -1,18 +1,9 @@
 #include <memory.h>
-#include "ls_http_request.h"
-#include "ls_hash.h"
-#include "server_config.h"
-#include "http_parser.h"
-#include "ls_trie.h"
 #include <stdint.h>
 #include <stddef.h>
-
-#if defined(__SSE2__)
-    #include <emmintrin.h>   
-    #define LS_HAS_SSE2 1
-#else 
-    #define LS_HAS_SSE2 0
-#endif
+#include "ls_http_request.h"
+#include "http_parser.h"
+#include "ls_trie.h"
 
 #if (LS_IS_LITTLE_ENDIAN)
     #define LS_CHAR4_INT(a, b, c, d)					\
@@ -41,7 +32,6 @@ static inline unsigned int P(const u_char* p)
 
 
 /* RFC 3986 Section 3.1 states " scheme = ALPHA * ( ALPHA / DIGIT / "+" / "-" / "." ) "  */
-/* This syntax doesn't work in all C compilers but just use GCC */
 static const u_char schema_chars[256] = {
     ['a' ... 'z'] = 1,
     ['A' ... 'Z'] = 1,
@@ -563,7 +553,6 @@ static inline const u_char* parse_http_version(const u_char* cursor, const u_cha
     return NULL;
 }
 
-/* --- end-of-line parsing --- */
 static inline const u_char* parse_end_of_request_line(const u_char* cursor, const u_char* end, int* err_code, int* state)
 {
     if(*cursor == '\r') {
@@ -674,7 +663,7 @@ void ls_http_parser_init()
     global_header_trie_root = ls_http_init_header_trie();
 }
 
-/* This function is bad for cache misses but every time I try to improve it becomes slower anyway */
+/* This function is really bad for cache misses but every time I try to improve it becomes slower anyway */
 static inline const u_char* parse_header_name(const u_char* cursor, const u_char* end, ls_http_request_t* req,
     int* err_code, int* state)
 {
@@ -693,7 +682,7 @@ static inline const u_char* parse_header_name(const u_char* cursor, const u_char
                 }
                 *state = LS_HTTP_OWS_BEFORE_VALUE;
                 req->header_name_end = cursor;
-                return cursor; /* move past ':' */
+                return ++cursor; /* move past ':' */
             }
             *err_code = LS_ERR_BAD_REQUEST;
             return NULL;
@@ -709,41 +698,6 @@ static inline const u_char* parse_header_name(const u_char* cursor, const u_char
     return cursor;
 }
 
-static const u_char* parse_header_name_hash_v2( const u_char* cursor, const u_char* end, ls_http_request_t* req,
-    int* err_code, int* state)
-{
-    while (cursor < end) {
-        u_char c = header_chars[*cursor];
-
-        if (!c) {
-            if (*cursor == ':') {
-                size_t len = cursor - req->header_name_start;
-                req->header_name_end = cursor;
-
-                // finalize CRC32
-                req->header_hash ^= 0xFFFFFFFF;
-
-                req->header_id = ls_hdr_hash_lookup(
-                    req->header_name_start,
-                    len,
-                    req->header_hash);
-
-                *state = LS_HTTP_OWS_BEFORE_VALUE;
-                return ++cursor;
-            }
-
-            *err_code = LS_ERR_BAD_REQUEST;
-            return NULL;
-        }
-
-        req->header_hash = _mm_crc32_u8(req->header_hash, c);
-
-        cursor++;
-    }
-
-    *err_code = LS_ERR_NEED_MORE_CHARS;
-    return cursor;
-}
 
 static inline const u_char* parse_ows(const u_char* cursor, const u_char* end, ls_http_request_t* req,
     int* err_code, int* state)
@@ -868,6 +822,7 @@ const u_char* parse_header_lines(const u_char* cursor, const u_char* end, ls_htt
 }
 
 /* === End of functions for the header lines === */
+
 const u_char* ls_http_parse_request(const u_char *cursor, const u_char *end, ls_http_request_t* req,
     int *err_code, int *state)
 {
@@ -919,4 +874,3 @@ const u_char* ls_http_parse_request(const u_char *cursor, const u_char *end, ls_
 
 /* MAYBE JUST ALLOW ANY unreserved, resered of pct-encoded*/
 /* Maybe just allow any VCHAR */
-
