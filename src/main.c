@@ -348,16 +348,12 @@ int testFunc() {
 
 int main()
 {
-
     ls_http_parser_init();
     ls_http_init_header_hash();
-
     // testFunc();
     // return 0;
-
     const int num_tests = 1;
-    const int num_iterations = 500000;
-
+    const int num_iterations = 1000000;
     for (int i = 0; i < num_tests; ++i)
     {
         count = 0;

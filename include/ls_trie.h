@@ -13,9 +13,9 @@ typedef unsigned char u_char;
 typedef struct ls_trie_node_s {
     struct ls_trie_node_s *children[77];
     int header_id;     /* LS_HTTP_HDR_* if terminal, else LS_HTTP_HDR_UNKOWN */
-} ls_trie_node_t;
+}  ls_trie_node_t;
 
-static ls_trie_node_t* ls_trie_create_node(void)
+static ls_trie_node_t* ls_trie_create_node()
 {
     ls_trie_node_t* node = (ls_trie_node_t*)calloc(1, sizeof(ls_trie_node_t));
     node->header_id = LS_HTTP_HDR_UNKOWN;

@@ -1,6 +1,6 @@
 #include <memory.h>
-#include "ls_hash.h"
 #include "ls_http_request.h"
+#include "ls_hash.h"
 #include "server_config.h"
 #include "http_parser.h"
 #include "ls_trie.h"
@@ -674,6 +674,7 @@ void ls_http_parser_init()
     global_header_trie_root = ls_http_init_header_trie();
 }
 
+/* This function is bad for cache misses but every time I try to improve it becomes slower anyway */
 static inline const u_char* parse_header_name(const u_char* cursor, const u_char* end, ls_http_request_t* req,
     int* err_code, int* state)
 {
@@ -681,7 +682,6 @@ static inline const u_char* parse_header_name(const u_char* cursor, const u_char
 
         u_char c = header_chars[*cursor];
 
-        /* Header name finished */
         if(!c) {
             if (likely(*cursor == ':'))
             {
@@ -693,7 +693,7 @@ static inline const u_char* parse_header_name(const u_char* cursor, const u_char
                 }
                 *state = LS_HTTP_OWS_BEFORE_VALUE;
                 req->header_name_end = cursor;
-                return cursor + 1; /* move past ':' */
+                return cursor; /* move past ':' */
             }
             *err_code = LS_ERR_BAD_REQUEST;
             return NULL;
@@ -709,17 +709,19 @@ static inline const u_char* parse_header_name(const u_char* cursor, const u_char
     return cursor;
 }
 
-static const u_char* parse_header_name_hash_v2(const u_char* cursor, const u_char* end, ls_http_request_t* req,
+static const u_char* parse_header_name_hash_v2( const u_char* cursor, const u_char* end, ls_http_request_t* req,
     int* err_code, int* state)
 {
     while (cursor < end) {
-
         u_char c = header_chars[*cursor];
 
         if (!c) {
             if (*cursor == ':') {
                 size_t len = cursor - req->header_name_start;
                 req->header_name_end = cursor;
+
+                // finalize CRC32
+                req->header_hash ^= 0xFFFFFFFF;
 
                 req->header_id = ls_hdr_hash_lookup(
                     req->header_name_start,
@@ -729,11 +731,12 @@ static const u_char* parse_header_name_hash_v2(const u_char* cursor, const u_cha
                 *state = LS_HTTP_OWS_BEFORE_VALUE;
                 return ++cursor;
             }
+
             *err_code = LS_ERR_BAD_REQUEST;
             return NULL;
         }
 
-        req->header_hash = ((req->header_hash<<5) + req->header_hash) ^ c;
+        req->header_hash = _mm_crc32_u8(req->header_hash, c);
 
         cursor++;
     }
@@ -842,7 +845,7 @@ const u_char* parse_header_lines(const u_char* cursor, const u_char* end, ls_htt
     while(1) {
         req->header_name_start = cursor;
         req->current_trie_node = global_header_trie_root;
-        // req->header_hash = 0;
+        req->header_hash = 0xFFFFFFFF;
         cursor = parse_header_line(cursor, end, req, err_code, state);
         if(!store_header(req)) {
             return NULL;
