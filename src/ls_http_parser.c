@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "ls_http_request.h"
-#include "http_parser.h"
+#include "ls_http_parser.h"
 #include "ls_trie.h"
 
 #if (LS_IS_LITTLE_ENDIAN)
@@ -147,7 +147,7 @@ static const unsigned char header_chars[256] = {
     ['Q'] = 'q', ['R'] = 'r', ['S'] = 's', ['T'] = 't',
     ['U'] = 'u', ['V'] = 'v', ['W'] = 'w', ['X'] = 'x',
     ['Y'] = 'y', ['Z'] = 'z',
-    /* Lowercase map to themselves */ 
+    /* Lowercase map to themselves */
     ['a'] = 'a', ['b'] = 'b', ['c'] = 'c', ['d'] = 'd',
     ['e'] = 'e', ['f'] = 'f', ['g'] = 'g', ['h'] = 'h',
     ['i'] = 'i', ['j'] = 'j', ['k'] = 'k', ['l'] = 'l',
@@ -160,7 +160,7 @@ static const unsigned char header_chars[256] = {
     ['4'] = '4', ['5'] = '5', ['6'] = '6', ['7'] = '7',
     ['8'] = '8', ['9'] = '9',
     /* Dash maps to itself */
-    ['-'] = '-', 
+    ['-'] = '-',
 };
 
 /* === Start of funtions for the request line  === */
@@ -169,7 +169,7 @@ static inline const u_char* parse_method(const u_char* cursor, const u_char* end
 {
     /**
      * The shortest HTTP request is: "GET / HTTP/1.1\n\n" which is 16 characters long if we allow \n instead of \r\n.
-     * The max amount we check for a method is 8 so we can check this condition to ensure the request is valid and all methods can be safely checked. 
+     * The max amount we check for a method is 8 so we can check this condition to ensure the request is valid and all methods can be safely checked.
      * Without testing I think it is also unlikely that we would read less than 8 bytes of a request to start with which is why I think this is a good optimisation but I can't benchmark this
      * until I get my webserver up and running better
      */
@@ -190,7 +190,7 @@ static inline const u_char* parse_method(const u_char* cursor, const u_char* end
         return cursor;
     } else {
         /* Handle the more uncommon methods */
-        switch(P(cursor)) 
+        switch(P(cursor))
         {
             case LS_CHAR4_INT('P','U','T',' '):
                 req->method = LS_HTTP_PUT;
@@ -709,7 +709,7 @@ static inline const u_char* parse_ows(const u_char* cursor, const u_char* end, l
         *err_code = LS_ERR_NEED_MORE_CHARS;
         return cursor;
     }
-    req->header_value_start = cursor; 
+    req->header_value_start = cursor;
     *state = LS_HTTP_HEADER_VALUE;
     return cursor;
 }
@@ -734,7 +734,7 @@ static inline const u_char* parse_header_value(const u_char* cursor, const u_cha
                 return cursor-1;
             }
         }
-        else if(*cursor == '\n') { 
+        else if(*cursor == '\n') {
             req->header_value_end = cursor;
             *state = LS_HTTP_STRIP_VALUE_OWS;
             return cursor;
@@ -867,9 +867,9 @@ const u_char* ls_http_parse_request(const u_char *cursor, const u_char *end, ls_
 /* RFC 3986 Section 3.3 states       "    path-abempty  = *( "/" segment )" */
 /* RFC 3986 Section 3.2.2 states       reg-name    = * ( unreserved / pct-encoded / sub-delims )  */
 /**
- * So absolute-form = scheme ":" hier-part 
+ * So absolute-form = scheme ":" hier-part
  * Scheme is just a certain set of restricted characters
- * Authority 
+ * Authority
  */
 
 /* MAYBE JUST ALLOW ANY unreserved, resered of pct-encoded*/
