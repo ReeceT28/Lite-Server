@@ -139,28 +139,29 @@ static const u_char ip_literal_chars[256] = {
 };
 
 static const unsigned char header_chars[256] = {
+    [0 ... 255] = 255,
     /* Uppercase maps to lowercase */
-    ['A'] = 'a', ['B'] = 'b', ['C'] = 'c', ['D'] = 'd',
-    ['E'] = 'e', ['F'] = 'f', ['G'] = 'g', ['H'] = 'h',
-    ['I'] = 'i', ['J'] = 'j', ['K'] = 'k', ['L'] = 'l',
-    ['M'] = 'm', ['N'] = 'n', ['O'] = 'o', ['P'] = 'p',
-    ['Q'] = 'q', ['R'] = 'r', ['S'] = 's', ['T'] = 't',
-    ['U'] = 'u', ['V'] = 'v', ['W'] = 'w', ['X'] = 'x',
-    ['Y'] = 'y', ['Z'] = 'z',
+    ['A'] = 0, ['B'] = 1, ['C'] = 2, ['D'] = 3,
+    ['E'] = 4, ['F'] = 5, ['G'] = 6, ['H'] = 7,
+    ['I'] = 8, ['J'] = 9, ['K'] = 10, ['L'] = 11,
+    ['M'] = 12, ['N'] = 13, ['O'] = 14, ['P'] = 15,
+    ['Q'] = 16, ['R'] = 17, ['S'] = 18, ['T'] = 19,
+    ['U'] = 20, ['V'] = 21, ['W'] = 22, ['X'] = 23,
+    ['Y'] = 24, ['Z'] = 25,
     /* Lowercase map to themselves */
-    ['a'] = 'a', ['b'] = 'b', ['c'] = 'c', ['d'] = 'd',
-    ['e'] = 'e', ['f'] = 'f', ['g'] = 'g', ['h'] = 'h',
-    ['i'] = 'i', ['j'] = 'j', ['k'] = 'k', ['l'] = 'l',
-    ['m'] = 'm', ['n'] = 'n', ['o'] = 'o', ['p'] = 'p',
-    ['q'] = 'q', ['r'] = 'r', ['s'] = 's', ['t'] = 't',
-    ['u'] = 'u', ['v'] = 'v', ['w'] = 'w', ['x'] = 'x',
-    ['y'] = 'y', ['z'] = 'z',
+    ['a'] = 0, ['b'] = 1, ['c'] = 2, ['d'] = 3,
+    ['e'] = 4, ['f'] = 5, ['g'] = 6, ['h'] = 7,
+    ['i'] = 8, ['j'] = 9, ['k'] = 10, ['l'] = 11,
+    ['m'] = 12, ['n'] = 13, ['o'] = 14, ['p'] = 15,
+    ['q'] = 16, ['r'] = 17, ['s'] = 18, ['t'] = 19,
+    ['u'] = 20, ['v'] = 21, ['w'] = 22, ['x'] = 23,
+    ['y'] = 24, ['z'] = 25,
     /* Digits map to themselves */
-    ['0'] = '0', ['1'] = '1', ['2'] = '2', ['3'] = '3',
-    ['4'] = '4', ['5'] = '5', ['6'] = '6', ['7'] = '7',
-    ['8'] = '8', ['9'] = '9',
+    ['0'] = 26, ['1'] = 27, ['2'] = 28, ['3'] = 29,
+    ['4'] = 30, ['5'] = 31, ['6'] = 32, ['7'] = 33,
+    ['8'] = 34, ['9'] = 35,
     /* Dash maps to itself */
-    ['-'] = '-',
+    ['-'] = 36,
 };
 
 /* === Start of funtions for the request line  === */
@@ -671,7 +672,7 @@ static inline const u_char* parse_header_name(const u_char* cursor, const u_char
 
         u_char c = header_chars[*cursor];
 
-        if(!c) {
+        if(c == 255) {
             if (likely(*cursor == ':'))
             {
                 if (likely(req->current_trie_node != NULL)) {
@@ -688,7 +689,7 @@ static inline const u_char* parse_header_name(const u_char* cursor, const u_char
             return NULL;
         }
         if (req->current_trie_node) {
-            req->current_trie_node = req->current_trie_node->children[c-45];
+            req->current_trie_node = req->current_trie_node->children[c];
         }
 
         ++cursor;

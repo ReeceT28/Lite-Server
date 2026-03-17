@@ -105,7 +105,6 @@ static void* small_palloc(ls_mem_pool_t* pool, size_t size)
         // Alternative approach is we can track number of failed allocs per block and move on if we get too many but still try ones with not too many fails.
         return alloc_block(pool);
     }
-
 }
 
 static void* large_palloc(ls_mem_pool_t* pool, size_t size)

@@ -5,13 +5,16 @@
 /* Represents a listening socket, essentially our server */
 typedef struct ls_lstning_sock_s {
   int fd;
-  struct sockaddr *sockaddr;
+  struct sockaddr* sockaddr;
   socklen_t socklen;
 } ls_lstning_sock_t;
 
 /* Represents a connection (a client) */
 typedef struct ls_connection_s {
   int fd;
-  ls_event_t *read_event;
-  ls_event_t *write_event;
+  ls_event_t* read_event;
+  ls_event_t* write_event;
 } ls_connection_t;
+
+
+int ls_create_lstning_sock(ls_lstning_sock_t*);

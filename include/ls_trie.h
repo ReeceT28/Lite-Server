@@ -6,7 +6,7 @@
 /* From the header_chars array defined in http_parser.c we only need a range of 77 characters */
 typedef struct ls_trie_node_s
 {
-    struct ls_trie_node_s *children[77];
+    struct ls_trie_node_s *children[37];
     int header_id;     /* LS_HTTP_HDR_* if terminal, else LS_HTTP_HDR_UNKOWN */
 }  ls_trie_node_t;
 
