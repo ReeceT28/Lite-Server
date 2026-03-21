@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include "ls_http_parser.h"
+#include "ls_http_parser_test.h"
 #include "ls_mem_pool.h"
 #include "ls_connection.h"
 

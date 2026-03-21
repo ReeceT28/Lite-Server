@@ -2,7 +2,6 @@
 #include <stdint.h>
 #include <memory.h>
 #include "ls_http_request.h"
-#include "ls_types.h"
 
 #if defined(__GNUC__) || defined(__clang__)
     #define likely(x)   (__builtin_expect((x), 1))
@@ -65,7 +64,8 @@ enum {
     LS_ERR_OKAY,
     LS_ERR_BAD_REQUEST,
     LS_ERR_NOT_IMPLEMENTED,
-    LS_ERR_NEED_MORE_CHARS
+    LS_ERR_NEED_MORE_CHARS,
+    LS_ERR_HEADER_STORAGE_FAILURE
 };
 
 /* Possible states during parsing */
@@ -91,12 +91,13 @@ enum {
     LS_HTTP_OWS_BEFORE_VALUE,
     LS_HTTP_HEADER_VALUE,
     LS_HTTP_STRIP_VALUE_OWS,
+    LS_HTTP_CHECK_END_OF_HEADERS,
     LS_HTTP_END_OF_HEADERS,
     LS_HTTP_DONE
 };
 
 
 void ls_http_parser_init();
-const u_char* parse_request_line(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state);
-const u_char* parse_header_lines(const u_char *cursor, const u_char *end, ls_http_request_t* req, int *err_code, int* state);
-const u_char* ls_http_parse_request(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state);
+// const u_char* parse_request_line(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int state);
+// const u_char* parse_header_lines(const u_char *cursor, const u_char *end, ls_http_request_t* req, int *err_code, int state);
+int ls_http_parse_request(ls_http_request_t* req);

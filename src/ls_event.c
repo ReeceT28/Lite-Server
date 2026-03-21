@@ -54,7 +54,10 @@ void ls_accept_handler(ls_event_t* ev)
     if(sock->config.type == LS_SOCK_HTTP) {
         conn->read_event.handler = ls_read_handler_http;
         conn->protocol_ctx = ls_create_request(pool);
-        ((ls_http_request_t*)conn->protocol_ctx)->raw_request = ls_palloc(conn->pool, LS_MAX_HTTP_SIZE);
+        ls_http_request_t* req = (ls_http_request_t*)conn->protocol_ctx;
+        req->raw_request = ls_palloc(conn->pool, LS_MAX_HTTP_SIZE);
+        req->cursor = req->raw_request;
+
     }
     else {
         printf("Unsupported protocol type \n");
@@ -98,10 +101,6 @@ void ls_read_handler_http(ls_event_t *ev)
         goto error;
     }
 
-    if (n == 0) {
-        // client closed connection
-        goto error;
-    }
 
     // update buffer length
     req->request_len += n;
@@ -113,22 +112,17 @@ void ls_read_handler_http(ls_event_t *ev)
     }
 
     // parse whatever we have so far
-    int err_code = LS_ERR_OKAY;
-    const u_char* cursor = curr_end;
-    const u_char* end = curr_end + n;
+    int err_code = ls_http_parse_request(req);
 
-    const u_char* new_cursor =
-        ls_http_parse_request(cursor, end, req, &err_code, &req->state);
-
-    if (!new_cursor) {
-        goto error;
-    }
-
-    if (err_code == LS_ERR_NEED_MORE_CHARS) {
+    if(err_code != LS_ERR_OKAY){
+      if (err_code == LS_ERR_NEED_MORE_CHARS) {
         // parser wants more data, just return
         // next readable event will call this function again
         return;
+      }
+      printf("BAD ERROR \n");
     }
+
 
     if (req->state == LS_HTTP_DONE) {
         ls_print_parsed_request(req);

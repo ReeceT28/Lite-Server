@@ -53,6 +53,7 @@ typedef struct {
     unsigned int header_capacity;
     int method;
     int state;
+    const u_char* cursor;
     const u_char* method_start;
     const u_char* method_end;
     const u_char* schema_start;

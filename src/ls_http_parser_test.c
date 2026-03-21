@@ -3,6 +3,7 @@
 #include <string.h>
 #include "ls_http_request.h"
 #include "ls_http_parser.h"
+#include "ls_mem_pool.h"
 #include "ls_http_parser_test.h"
 
 static const char* BIG_REQ =  "GET /wp-content/uploads/2010/03/hello-kitty-darth-vader-pink.jpg HTTP/1.1\r\n"
@@ -176,31 +177,23 @@ int parser_run_benchmark(int iterations)
 {
     size_t option_count = 0;
 
+
     for (int i = 0; i < iterations; ++i) {
 
-        ls_http_request_t req;
-        memset(&req, 0, sizeof(req));
-
-        req.raw_request = (const u_char *)BIG_REQ;
-        req.request_len = strlen((const char *)req.raw_request);
-
-        req.headers = malloc(sizeof(ls_header_t) * 32);
-        req.header_capacity = 32;
-
+        ls_mem_pool_t* pool =  ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
+        ls_http_request_t* req;
+        req = ls_create_request(pool);
+        req->raw_request = (const u_char *)BIG_REQ;
+        req->request_len = strlen((const char *)req->raw_request);
+        req->state = LS_HTTP_METHOD;
         int err_code = LS_ERR_OKAY;
-        const u_char *end = req.raw_request + req.request_len;
-        const u_char *cursor = req.raw_request;
-        int state = 0;
+        err_code = ls_http_parse_request(req);
 
-        cursor = ls_http_parse_request(cursor, end,
-                                       &req, &err_code, &state);
-
-        if (req.method == LS_HTTP_OPTIONS)
+        if (req->method == LS_HTTP_OPTIONS)
             option_count++;
 
-        free(req.headers);
+        ls_free_pool(pool);
     }
-
     printf("OPTION COUNT: %zu\n", option_count);
     return 0;
 }
@@ -210,20 +203,16 @@ int parser_run_print_test(void)
     size_t n_requests = 10;
     unsigned int capacity = 32;
     for(size_t i = 0; i < n_requests; ++i) {
-        ls_http_request_t req;
-        memset(&req, 0, sizeof(req));
-        req.raw_request = (const u_char*)ls_http_request_complete[i%100];
-        req.headers = malloc(sizeof(ls_header_t) * capacity);
-        req.header_capacity = capacity;
-        req.request_len = strlen((const char*)req.raw_request);
-        int err_code = LS_ERR_OKAY;
-        const u_char *end = req.raw_request + req.request_len;
-        const u_char *cursor = req.raw_request;
-        int state = 0;
-        cursor = ls_http_parse_request(cursor, end, &req, &err_code, &state);
-        ls_print_parsed_request(&req);
+        ls_mem_pool_t* pool =  ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
+        ls_http_request_t* req;
+        req = ls_create_request(pool);
+        req->raw_request = (const u_char*)ls_http_request_complete[i%100];
+        req->request_len = strlen((const char*)req->raw_request);
+        req->cursor = req->raw_request;
+        int err_code = ls_http_parse_request(req);
+        ls_print_parsed_request(req);
         printf("--------------------------------------------------\n");
-        free(req.headers);
+        ls_free_pool(pool);
     }
     return 0;
 }
