@@ -719,7 +719,7 @@ static inline const u_char* parse_header_value(const u_char* cursor, const u_cha
     int* err_code, int* state)
 {
     while(cursor < end) {
-        if(*cursor > 'r') {
+        if(*cursor > '\r') {
             ++cursor;
             continue;
         }
@@ -797,15 +797,17 @@ const u_char* parse_header_lines(const u_char* cursor, const u_char* end, ls_htt
 {
     /* If user wants to add their own header/field name then we can add it to the trie.
      * this can be done at runtime as well so wouldn't require recompilation  */
-    while(1) {
+    while(cursor < end) {
         req->header_name_start = cursor;
         req->current_trie_node = global_header_trie_root;
-        req->header_hash = 0xFFFFFFFF;
         cursor = parse_header_line(cursor, end, req, err_code, state);
-        if(!store_header(req)) {
+        if(*err_code != LS_ERR_OKAY) {
+            if(*err_code == LS_ERR_NEED_MORE_CHARS) {
+                return cursor;
+            }
             return NULL;
         }
-        if(*err_code != LS_ERR_OKAY) {
+        if(!store_header(req)) {
             return NULL;
         }
         if(*cursor == '\r') {
@@ -824,16 +826,26 @@ const u_char* parse_header_lines(const u_char* cursor, const u_char* end, ls_htt
 
 /* === End of functions for the header lines === */
 
-const u_char* ls_http_parse_request(const u_char *cursor, const u_char *end, ls_http_request_t* req,
-    int *err_code, int *state)
+const u_char* ls_http_parse_request(const u_char *cursor, const u_char *end, ls_http_request_t* req, int *err_code, int *state)
 {
-    cursor = parse_request_line(cursor, end, req, err_code, state);
-    if(!cursor) {
-        return NULL;
+    if (*state < LS_HTTP_REQ_LINE_DONE) {
+        cursor = parse_request_line(cursor, end, req, err_code, state);
+        req->state = *state;
+        if (!cursor) {
+            return NULL;
+        }
+        if (*err_code == LS_ERR_NEED_MORE_CHARS) {
+            return cursor;
+        }
+        *state = LS_HTTP_HEADER_NAME;
     }
-    *state = LS_HTTP_HEADER_NAME;
+
     cursor = parse_header_lines(cursor, end, req, err_code, state);
-    // parse_header_lines(cursor, end, req, err_code, state);
+    req->state = *state;
+    if(*err_code == LS_ERR_NEED_MORE_CHARS) {
+        return cursor;
+    }
+    req->state = LS_HTTP_DONE;
     return cursor;
 }
 

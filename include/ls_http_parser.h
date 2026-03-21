@@ -68,7 +68,7 @@ enum {
     LS_ERR_NEED_MORE_CHARS
 };
 
-/* Possible states during the parsing of the request line */
+/* Possible states during parsing */
 enum {
     LS_HTTP_METHOD,
     LS_HTTP_CUSTOM_HTTP_METHOD,
@@ -86,17 +86,15 @@ enum {
     LS_HTTP_HANDLE_QUERY,
     LS_HTTP_VERSION,
     LS_HTTP_END_OF_REQUEST_LINE,
-    LS_HTTP_REQ_LINE_DONE
-};
-
-/* Possible states during the parsing of a header line */
-enum {
+    LS_HTTP_REQ_LINE_DONE,
     LS_HTTP_HEADER_NAME,
     LS_HTTP_OWS_BEFORE_VALUE,
     LS_HTTP_HEADER_VALUE,
     LS_HTTP_STRIP_VALUE_OWS,
-    LS_HTTP_END_OF_HEADERS
+    LS_HTTP_END_OF_HEADERS,
+    LS_HTTP_DONE
 };
+
 
 void ls_http_parser_init();
 const u_char* parse_request_line(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int* state);

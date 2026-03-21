@@ -123,11 +123,11 @@ static const char* ls_http_request_complete[100] = {
     "OPTIONS /api/v1/items HTTP/1.1\r\nHost: api.example.com\r\n\r\n"
 };
 
-static void print_request_headers(const ls_header_t* headers, size_t header_count)
+static void print_request_headers(ls_array_t* headers)
 {
-    printf("\n===== Parsed Headers (%zu) =====\n", header_count);
-    for (size_t i = 0; i < header_count; i++) {
-        const ls_header_t* h = &headers[i];
+    printf("\n===== Parsed Headers (%zu) =====\n", headers->n_elmnts);
+    for (size_t i = 0; i < headers->n_elmnts; i++) {
+        const ls_header_t* h = &((ls_header_t*)headers->head)[i];
 
         size_t name_len  = h->name_end - h->name_start;
         size_t value_len = h->value_end - h->value_start;
@@ -141,7 +141,7 @@ static void print_request_headers(const ls_header_t* headers, size_t header_coun
     }
 }
 
-static void print_parsed_request(const ls_http_request_t* req)
+void ls_print_parsed_request(const ls_http_request_t* req)
 {
     printf(">>>> Original Request <<<< \n\n%.*s\n>>>> End of original Request <<<<\n", (int)req->request_len, req->raw_request);
 
@@ -168,7 +168,7 @@ static void print_parsed_request(const ls_http_request_t* req)
 
     printf("HTTP Major: %u, Minor: %u\n", req->http_major, req->http_minor);
 
-    print_request_headers(req->headers, req->header_count);
+    print_request_headers(req->headers);
 
 }
 
@@ -212,7 +212,7 @@ int parser_run_print_test(void)
     for(size_t i = 0; i < n_requests; ++i) {
         ls_http_request_t req;
         memset(&req, 0, sizeof(req));
-        req.raw_request = (const u_char*)BIG_REQ;
+        req.raw_request = (const u_char*)ls_http_request_complete[i%100];
         req.headers = malloc(sizeof(ls_header_t) * capacity);
         req.header_capacity = capacity;
         req.request_len = strlen((const char*)req.raw_request);
@@ -221,7 +221,7 @@ int parser_run_print_test(void)
         const u_char *cursor = req.raw_request;
         int state = 0;
         cursor = ls_http_parse_request(cursor, end, &req, &err_code, &state);
-        print_parsed_request(&req);
+        ls_print_parsed_request(&req);
         printf("--------------------------------------------------\n");
         free(req.headers);
     }
