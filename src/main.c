@@ -31,6 +31,9 @@ int main()
     ls_http_parser_init();
     ls_init_alloc();    
 
+    // parser_run_benchmark(1000000);
+    // return 0;
+
     /* Create memory pool and initialise server context */
     ls_mem_pool_t* pool =  ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
     ls_server_context_t* server_context = ls_palloc(pool, sizeof(ls_server_context_t));

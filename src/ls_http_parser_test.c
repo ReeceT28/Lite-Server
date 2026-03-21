@@ -179,19 +179,15 @@ int parser_run_benchmark(int iterations)
 
 
     for (int i = 0; i < iterations; ++i) {
-
         ls_mem_pool_t* pool =  ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
         ls_http_request_t* req;
         req = ls_create_request(pool);
         req->raw_request = (const u_char *)BIG_REQ;
         req->request_len = strlen((const char *)req->raw_request);
-        req->state = LS_HTTP_METHOD;
-        int err_code = LS_ERR_OKAY;
-        err_code = ls_http_parse_request(req);
-
+        req->cursor = req->raw_request;
+        int err_code = ls_http_parse_request(req);
         if (req->method == LS_HTTP_OPTIONS)
             option_count++;
-
         ls_free_pool(pool);
     }
     printf("OPTION COUNT: %zu\n", option_count);

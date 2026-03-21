@@ -659,6 +659,12 @@ void ls_http_parser_init()
 /* This function is really bad for cache misses but every time I try to improve it becomes slower anyway */
 static inline int parse_header_name(const u_char* cursor, const u_char* end, ls_http_request_t* req)
 {
+    if (cursor < end && (*cursor == '\r' || *cursor == '\n')) {
+        req->state = LS_HTTP_CHECK_END_OF_HEADERS;
+        req->header_name_start = NULL;  // Mark this as not a real header
+        req->cursor = cursor;
+        return LS_ERR_OKAY;
+    }
     while (cursor < end) {
 
         u_char c = header_chars[*cursor];
@@ -748,7 +754,6 @@ static inline void strip_value_ows(ls_http_request_t* req)
     while(curr_end > req->raw_request && (*curr_end == ' ' || *curr_end == '\t'))
         --curr_end;
     req->header_value_end = curr_end + 1;
-    req->state = LS_HTTP_CHECK_END_OF_HEADERS;
 }
 
 static inline int check_eohs(const u_char* cursor, const u_char* end, ls_http_request_t* req)
@@ -789,7 +794,7 @@ static inline int parse_header_line( const u_char* cursor, const u_char* end, ls
                 break;
             case LS_HTTP_STRIP_VALUE_OWS:
                 strip_value_ows(req);
-                break;
+                goto done;
             case LS_HTTP_CHECK_END_OF_HEADERS:
                 err_code = check_eohs(cursor, end, req);
                 if(err_code != LS_ERR_OKAY) {
@@ -815,22 +820,33 @@ static int parse_header_lines(const u_char* cursor, const u_char* end, ls_http_r
     /* If user wants to add their own header/field name then we can add it to the trie.
      * this can be done at runtime as well so wouldn't require recompilation  */
     while(1) {
-        if(req->state == LS_HTTP_HEADER_NAME) {
+        if(req->state == LS_HTTP_HEADER_NAME && req->header_name_start == NULL) {
+            // Only set once at the start of a new header, not on retries
             req->header_name_start = cursor;
             req->current_trie_node = global_header_trie_root;
         }
+
         int err_code = parse_header_line(cursor, end, req);
         cursor = req->cursor; 
         if(err_code != LS_ERR_OKAY) {
             return err_code;
         }
-        if(req->state == LS_HTTP_END_OF_HEADERS) {
-            return err_code;
+        
+        // Only store if this is a real header (name_start is non-NULL)
+        if (req->header_name_start != NULL) {
+            if(!store_header(req)) {
+                return LS_ERR_HEADER_STORAGE_FAILURE;
+            }
         }
-        if(!store_header(req)) {
-            return LS_ERR_HEADER_STORAGE_FAILURE;
+        
+        // After storing, check if we've reached end of headers
+        if (req->state == LS_HTTP_END_OF_HEADERS) {
+            return LS_ERR_OKAY;
         }
+        
+        // Reset for next header
         req->state = LS_HTTP_HEADER_NAME;
+        req->header_name_start = NULL;  // Mark that we haven't set the name_start yet
     }
 }
 
@@ -850,7 +866,6 @@ int ls_http_parse_request(ls_http_request_t* req)
     }
 
     err_code = parse_header_lines(req->cursor, end, req);
-    printf("Raw Request: %.*s\n", req->request_len, req->raw_request);
     if(err_code != LS_ERR_OKAY) {
         return err_code;
     }
