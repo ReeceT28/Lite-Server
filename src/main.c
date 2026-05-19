@@ -39,6 +39,7 @@ int main()
     ls_mem_pool_t* pool =  ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
     ls_server_context_t* server_context = ls_palloc(pool, sizeof(ls_server_context_t));
     /* Add listening socket */
+    server_context->pool = pool;
     server_context->lstning_sockets = ls_create_array(pool, sizeof(ls_lstning_sock_t), 1);
     ls_lstning_sock_t* sock = (ls_lstning_sock_t*)ls_array_push(server_context->lstning_sockets);
     if(sock == NULL) {
