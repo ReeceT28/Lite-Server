@@ -1,28 +1,35 @@
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/epoll.h>
 #include <unistd.h>
-#include "ls_http_parser_test.h"
 #include "ls_http_parser.h"
 #include "ls_http_request.h"
 #include "ls_event.h"
 #include "ls_connection.h"
 #include "ls_mem_pool.h"
 #include "ls_server.h"
+#include "ls_http_response.h"
 
 
 void ls_accept_handler(ls_event_t* ev)
 {
-    printf("Attempting to accept connection \n");
     ls_lstning_sock_t* sock = (ls_lstning_sock_t*)ev->data;
     ls_server_context_t* server = sock->server;
 
-    int client_fd = accept(sock->fd, NULL, NULL);
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+
+    int client_fd = accept(sock->fd, (struct sockaddr*)&client_addr, &client_len);
     if (client_fd == -1) {
         perror("accept");
         return;
     }
+
+    char ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
+    printf("Accepted connection from %s:%d\n", ip, ntohs(client_addr.sin_port));
 
     int flags = fcntl(client_fd, F_GETFL, 0);
     if (flags == -1) {
@@ -125,7 +132,12 @@ void ls_read_handler_http(ls_event_t *ev)
 
 
     if (req->state == LS_HTTP_DONE) {
-        ls_print_parsed_request(req);
+        /* Generate a response here */
+        ls_http_response_t* res = ls_build_http_response(conn);
+        if(res->status == 200){
+            ls_send_http_response(conn, res);
+        }
+
         close(conn->fd);
         ls_free_pool(conn->pool);
         return;

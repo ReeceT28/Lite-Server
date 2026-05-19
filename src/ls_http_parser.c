@@ -850,7 +850,7 @@ int ls_http_parse_request(ls_http_request_t* req)
     }
 
     err_code = parse_header_lines(req->cursor, end, req);
-    printf("Raw Request: %.*s\n", req->request_len, req->raw_request);
+    // printf("Raw Request: %.*s\n", req->request_len, req->raw_request);
     if(err_code != LS_ERR_OKAY) {
         return err_code;
     }
