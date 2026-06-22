@@ -168,6 +168,8 @@ static const unsigned char header_chars[256] = {
 
 static inline int parse_method(const u_char* cursor, const u_char* end, ls_http_request_t* req)
 {
+    /* Skip leading \n's */
+    while(cursor < end && *(cursor) == '\n') ++cursor;
     /**
      * The shortest HTTP request is: "GET / HTTP/1.1\n\n" which is 16 characters long if we allow \n instead of \r\n.
      * The max amount we check for a method is 8 so we can check this condition to ensure the request is valid and all methods can be safely checked.
@@ -177,9 +179,11 @@ static inline int parse_method(const u_char* cursor, const u_char* end, ls_http_
     if(unlikely(cursor + 8 >= end)) {
         return LS_ERR_NEED_MORE_CHARS;
     }
+    req->method_start = cursor;
     /* Fast track for GET and POST which are by far the most common methods */
     if(likely(P(cursor) == LS_CHAR4_INT('G','E','T',' '))) {
         req->method = LS_HTTP_GET;
+        req->method_end = cursor + 3;
         req->cursor = cursor + 4;
         req->state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
         return LS_ERR_OKAY;
@@ -194,6 +198,7 @@ static inline int parse_method(const u_char* cursor, const u_char* end, ls_http_
         {
             case LS_CHAR4_INT('P','U','T',' '):
                 req->method = LS_HTTP_PUT;
+                req->method_end = cursor + 3;
                 req->cursor = cursor + 4;
                 req->state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
                 return LS_ERR_OKAY;
@@ -213,8 +218,9 @@ static inline int parse_method(const u_char* cursor, const u_char* end, ls_http_
             case LS_CHAR4_INT('C','O','N','N'):
                 if(P(cursor+4) == LS_CHAR4_INT('E','C','T',' ')) {
                     req->method = LS_HTTP_CONNECT;
+                    req->method_end = cursor + 7;
                     req->cursor = cursor + 8;
-                    req->host_start = cursor;
+                    req->host_start = cursor; /* CONNECT always goes straight to host */
                     req->state = LS_HTTP_HOST_START;
                     return LS_ERR_OKAY;
                 }
@@ -222,6 +228,7 @@ static inline int parse_method(const u_char* cursor, const u_char* end, ls_http_
             case LS_CHAR4_INT('O','P','T','I'):
                 if(P(cursor+4) == LS_CHAR4_INT('O','N','S',' ')) {
                     req->method = LS_HTTP_OPTIONS;
+                    req->method_end = cursor + 7;
                     req->cursor = cursor + 8;
                     req->state = LS_HTTP_FIGURE_OUT_REQ_TARGET_TYPE;
                     return LS_ERR_OKAY;
@@ -236,7 +243,6 @@ static inline int parse_method(const u_char* cursor, const u_char* end, ls_http_
                 }
                 return LS_ERR_BAD_REQUEST;
             default:
-                req->method_start = cursor;
                 req->state = LS_HTTP_CUSTOM_HTTP_METHOD;
                 return LS_ERR_OKAY;
         }
@@ -546,6 +552,7 @@ static inline int parse_http_version(const u_char* cursor, const u_char* end, ls
         if(req->http_minor > 9) { return LS_ERR_BAD_REQUEST; }
         req->state = LS_HTTP_END_OF_REQUEST_LINE;
         req->cursor = ++cursor;
+        req->version_end = cursor;
         return LS_ERR_OKAY;
     }
     return LS_ERR_BAD_REQUEST;

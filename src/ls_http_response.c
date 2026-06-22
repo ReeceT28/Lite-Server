@@ -1,6 +1,6 @@
-#include <stdarg.h>
 #define _GNU_SOURCE
 #include <stdlib.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <sys/sendfile.h>
 #include <linux/limits.h>
@@ -8,8 +8,8 @@
 #include <fcntl.h>
 #include "ls_http_response.h"
 #include "ls_http_parser.h"
+#include "ls_server.h"
 #include "ls_http_request.h"
-#include "ls_connection.h"
 
 static int ls_append(ls_http_response_t* res, const char* data, size_t len)
 {
@@ -31,9 +31,8 @@ static void ls_write_status_line(ls_http_response_t* res, int http_major, int ht
         ls_append(res, buf, (size_t)len);
 }
 
-static void ls_handle_get(ls_connection_t* conn, ls_http_response_t* res)
+static void ls_handle_get(ls_http_request_t* req, ls_http_response_t* res, ls_server_context_t* server)
 {
-    ls_http_request_t* req = conn->protocol_ctx;
 
     if (req->http_major != 1 || req->http_minor != 1) {
         res->status = 505;
@@ -45,7 +44,7 @@ static void ls_handle_get(ls_connection_t* conn, ls_http_response_t* res)
     char* path = (char*)req->path_start;
     size_t len = (char*)req->path_end - path;
 
-    const char *root = (const char*)conn->server->root;
+    const char *root = (const char*)server->root;
     size_t root_len = strlen(root);
 
     char resolved_path[PATH_MAX];
@@ -124,51 +123,21 @@ static void ls_handle_get(ls_connection_t* conn, ls_http_response_t* res)
     }
 
     // Connection header
-    ls_append(res, "Connection: close\r\n", 19);
+    // ls_append(res, "Connection: close\r\n", 19);
 
     // End headers
     ls_append(res, "\r\n", 2);
 }
 
-ls_http_response_t* ls_build_http_response(ls_connection_t* conn)
+ls_http_response_t* ls_build_http_response(ls_mem_pool_t* pool, ls_http_request_t* req, ls_server_context_t* server)
 {
-    ls_http_response_t* res = ls_palloc(conn->pool, sizeof(ls_http_response_t));
+    ls_http_response_t* res = ls_palloc(pool, sizeof(ls_http_response_t));
     memset(res, 0, sizeof(ls_http_response_t));
-    ls_http_request_t* req = conn->protocol_ctx;
-    res->response = ls_palloc(conn->pool, MAX_RESPONSE_SIZE);
+    res->response = ls_palloc(pool, MAX_RESPONSE_SIZE);
     /* Need to eventually probably be able to expose the request to special custom user defined functions */
     if(req->method == LS_HTTP_GET) {
-        ls_handle_get(conn, res);
+        ls_handle_get(req, res, server);
     }
+
     return res;
-}
-
-void ls_send_http_response(ls_connection_t* conn, ls_http_response_t* res)
-{
-
-    // 1. Send headers first
-    if (res->response_sent < res->response_size) {
-        ssize_t n = send(conn->fd, res->response + res->response_sent, res->response_size - res->response_sent, 0);
-
-        if (n <= 0) {
-            perror("Error sending http response");
-            return;
-        } 
-
-        res->response_sent += n;
-    }
-
-    // 2. Then send file
-    if (res->file_fd != -1) {
-        ssize_t n = sendfile(conn->fd, res->file_fd, &res->file_offset, res->file_size - res->file_offset);
-
-        if (n <= 0) return;
-
-        res->file_offset += n;
-
-        if (res->file_offset >= res->file_size) {
-            close(res->file_fd);
-            res->file_fd = -1;
-        }
-    }
 }

@@ -16,7 +16,7 @@ void ls_init_alloc()
 static inline uintptr_t align_ptr(uintptr_t p, size_t a)
 {
     /* (p + (a-1)) ensures that we can never go backwards when aligning possibly writing over data, we do + (a-1) so if p is already aligned we don't waste memory */
-    /* Example is best for & ~(a-1). Say a = 16 then a-1 = 0b00001111 => ~(a-1) = 0b11110000 if we & with these notice that the result will always be a multiple of a */
+    /* Example:  & ~(a-1). Say a = 16 then a-1 = 0b00001111 => ~(a-1) = 0b11110000 if we & with these notice that the result will always be a multiple of a */
     return (p + (a - 1)) & ~(a - 1);
 }
 
@@ -85,10 +85,10 @@ static void* alloc_block(ls_mem_pool_t* pool)
     }
     pool->current->next = block;
     pool->current = block;
-    block->next_free = (u_char*)block + sizeof(ls_pool_block_t);
     block->failed = 0;
     block->next = NULL;
     block->end = (u_char*)block + block_size; 
+    block->next_free = (u_char*)align_ptr((uintptr_t)block + sizeof(ls_pool_block_t),LS_POOL_ALIGNMENT);
     return block->next_free;
 }
 
