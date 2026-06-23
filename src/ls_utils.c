@@ -2,6 +2,7 @@
 #include <time.h>
 #include "ls_utils.h"
 
+/* Helper function to get the current time, uses CLOCK_MONOTONIC so should be time since boot */
 uint64_t now_ms()
 {
     struct timespec ts;

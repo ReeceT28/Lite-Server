@@ -83,7 +83,7 @@ int ls_log_write(ls_log_cfg_t* log, const char* data, size_t len, uint32_t event
 
 
 /* Possibly refactor to not take in conn?*/
-int ls_log_combined(ls_http_response_t* res, ls_connection_t* conn, ls_mem_pool_t* pool)
+int ls_log_combined(ls_http_response_t* res, ls_connection_t* conn)
 {
     ls_log_cfg_t* log_cfg = conn->worker->server->log_cfg;
     if(!((log_cfg->log_cfgs & LS_LOG_ENABLED) && (log_cfg->log_cfgs & LS_LOG_FORMAT_COMBINED))) return 0;
@@ -111,24 +111,14 @@ int ls_log_combined(ls_http_response_t* res, ls_connection_t* conn, ls_mem_pool_
     int status = res->status;
     long size = res->file_size;
 
-    /* estimate length and alloc from pool */
-    size_t needed = strlen(host) + strlen(timestr) + strlen(user)
-                    + req_line_len + 128;
-    char *out = ls_palloc(pool, needed);
-    if (!out) return -1;
-
-    int written = snprintf(out, needed, "%s - %s [%s] \"%.*s\" %d %ld\n", host, user, timestr, req_line_len, req_line, status, size);
+    char out[1024];
+    int written = snprintf(out, sizeof(out),  "%s - %s [%s] \"%.*s\" %d %ld\n",  host, user, timestr, req_line_len, req_line, status, size);
     if (written < 0)
-      return -1;
-
-    size_t send_len;
-    if ((size_t)written < needed)
-      send_len = (size_t)written; 
-    else
-      send_len = needed - 1; 
-
+        return -1;
+    size_t send_len = (size_t)written;
+    if (send_len >= sizeof(out))
+        send_len = sizeof(out) - 1;
     return ls_log_write_nocheck(log_cfg, out, send_len);
-
 }
 
 int ls_log_disconnect(int fd, ls_log_cfg_t* log)
