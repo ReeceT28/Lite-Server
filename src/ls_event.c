@@ -150,7 +150,7 @@ void ls_read_handler_http(ls_event_t *ev)
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return;
         }
-        printf("bad read\n");
+        perror("read() in ls_read_handler_http");
         goto error;
     }
 
@@ -298,6 +298,8 @@ void ls_write_handler_http(ls_event_t* ev)
         }
         http_ctx->req = ls_create_request(http_ctx->pool);
         http_ctx->res = NULL;
+        http_ctx->req->raw_request = ls_palloc(http_ctx->pool, LS_MAX_HTTP_SIZE);
+        http_ctx->req->cursor = http_ctx->req->raw_request;
         http_ctx->res_in_progress = 0;
 
     } else if(rc == LS_HTTP_SEND_ERR) {
