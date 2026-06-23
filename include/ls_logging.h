@@ -22,6 +22,6 @@ typedef struct ls_log_cfg_s{
 int ls_log_init(uint32_t log_cfgs, const char* file_path, ls_server_context_t* server); /* Null terminated file path*/
 int ls_log_close(ls_log_cfg_t* log);
 int ls_log_write(ls_log_cfg_t* log, const char* data, size_t len, uint32_t event_flag);
-int ls_log_combined(ls_http_response_t* res, ls_connection_t* conn, ls_mem_pool_t* pool);
+int ls_log_combined(ls_http_response_t* res, ls_connection_t* conn);
 int ls_log_disconnect(int fd, ls_log_cfg_t* log);
 
