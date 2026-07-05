@@ -19,7 +19,11 @@
 #include "ls_connection.h"
 #include "ls_server.h"
 
-/* Gets the connection with the shortest remaining timeout so that epoll doesn't block the timeout of connections */
+/**
+ * @brief Computes the time remaining until epoll should timeout and the next connection should be timed out 
+ * @param worker Pointer to the worker thread which the epoll loop is running on 
+ * @return The epoll timeout in milliseconds
+ */ 
 static int compute_epoll_timeout(ls_worker_t* worker)
 {    	
     if (worker->n_connections == 0)
@@ -41,38 +45,46 @@ static int compute_epoll_timeout(ls_worker_t* worker)
     return (int)(nearest - now);
 }
 
-/* Disconnect any connections that have timed out */
+/**
+ * @brief Expires any connections on a worker thread that should be timed out 
+ * @param worker Pointer to the worker thread which the epoll loop is running on 
+ */ 
 static void ls_expire_connections(ls_worker_t* worker)
 {
     uint64_t now = now_ms();
 
     for (size_t i = 0; i < worker->n_connections; ++i) {
         ls_connection_t* conn = worker->connections[i];
-
+        
         if (conn->expire_at <= now) {
+            ls_log_disconnect(conn->fd, worker->server->log_cfg);
             epoll_ctl(worker->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
             close(conn->fd);
 
-            if(conn->pool) {
-                ls_free_pool(conn->pool);
-            }
+            /* Log disconnect if server is configured to do so (mostly for debugging purposes) */
 
-            /* Setting closed to true is important, otherwise if epoll already fetched some event to do with the connection could cause weird behaviour */
+            ls_http_ctx_t* http_ctx = (ls_http_ctx_t*)conn->protocol_ctx;
+            ls_free_pool(http_ctx->pool);
+            ls_free_pool(conn->pool);
             conn->closed = 1;
 
-            /* Log disconnect if server is configured to do so (mostly for debugging purposes) */
-            ls_log_disconnect(conn->fd, worker->server->log_cfg);
-
-            /* Swap last connection to the position of this connection to keep connection array dense */
-            worker->connections[i] = worker->connections[worker->n_connections - 1];
+            size_t idx = conn->index;
+            size_t last = worker->n_connections - 1;
+            worker->connections[idx] = worker->connections[last];
+            worker->connections[idx]->index = idx;
+            worker->connections[last] = conn;
             worker->n_connections--;
+
             /* Decrement or the element we just swapped to this position would be missed */
             --i;
         }
     }
 }
 
-/* Runs the epoll loop for a worker thread */
+/** 
+ * @brief runs the event loop for a worker thread 
+ * @param worker Pointer to the worker thread which the epoll loop is running on 
+ */ 
 void run_event_loop(ls_worker_t* worker) {
     struct epoll_event events[1024];
 
@@ -176,7 +188,7 @@ int main()
 
     /* Set the root directory where web server's files will be accessed from */
     char abs_root[PATH_MAX];
-    realpath("/var/www/test", abs_root);
+    realpath("/home/reecet/vscodeproject/website", abs_root);
     ls_set_root_dir(server_context, abs_root);
 
     /* Run the event loop */
