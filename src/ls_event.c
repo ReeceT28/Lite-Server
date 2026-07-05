@@ -16,22 +16,25 @@
 #include "ls_http_response.h"
 #include "ls_logging.h"
 
-/* Accepts connections from clients to a listening socket */
+/**
+ * @brief Accepts connections from clients to a listening socket 
+ * @param ev Pointer to the event that is being handled 
+ */
 void ls_accept_handler(ls_event_t* ev)
 {
     ls_lstning_sock_t* sock = (ls_lstning_sock_t*)ev->data;
     ls_worker_t* worker = sock->worker;
 
+    /* Accept the connection request */
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
-
     int client_fd = accept(sock->fd, (struct sockaddr*)&client_addr, &client_len);
     if (client_fd == -1) {
         perror("accept() in ls_accept_handler");
         return;
     }
 
-    /* Get the status flags */
+    /* Get the status flags of the client's socket */
     int flags = fcntl(client_fd, F_GETFL, 0);
     if (flags == -1) {
         close(client_fd);
@@ -39,7 +42,7 @@ void ls_accept_handler(ls_event_t* ev)
         return;
     }
 
-    /* Set client socket to be nonblocking */
+    /* Set client's socket to be nonblocking */
     flags = flags | O_NONBLOCK;
     if(fcntl(client_fd, F_SETFL, flags) == -1) {
         close(client_fd);
@@ -60,8 +63,8 @@ void ls_accept_handler(ls_event_t* ev)
 
     /* Create a memory pool to store anything related to the connection */
     ls_mem_pool_t* pool = ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
-
     if(pool == NULL){
+        printf("Error creating memory pool in ls_accept_handler\n");
         close(client_fd);
         return;
     }
@@ -74,10 +77,12 @@ void ls_accept_handler(ls_event_t* ev)
     conn->expire_at = now_ms() + (5 * 1000);
     conn->closed = 0;
 
-    /* Decide what to attach to epoll next depending on the protocol */
+    /* Configure the connection for the listening socket's protocol */
     if(sock->config.type == LS_SOCK_HTTP) {
         conn->read_event.handler = ls_read_handler_http;
         conn->read_event.data = conn;
+        conn->write_event.handler = ls_write_handler_http;
+        conn->write_event.data = conn;
         ls_http_ctx_t* http_ctx = ls_palloc(pool, sizeof(ls_http_ctx_t));
         if(http_ctx == NULL){
             close(client_fd);
@@ -100,7 +105,7 @@ void ls_accept_handler(ls_event_t* ev)
         http_ctx->res_in_progress = 0;
     }
     else {
-        printf("Unsupported protocol type \n");
+        printf("Unsupported protocol type\n");
         close(client_fd);
         ls_free_pool(pool);
         return;
@@ -111,7 +116,7 @@ void ls_accept_handler(ls_event_t* ev)
     ee.events = EPOLLIN;
     ee.data.ptr = &conn->read_event;
 
-    /* Attach epoll_event to epoll loop */
+    /* Monitor the client's socket with epoll */
     if (epoll_ctl(worker->epfd, EPOLL_CTL_ADD, client_fd, &ee) == -1) {
         perror("epoll_ctl in ls_accept_handler");
         if(sock->config.type == LS_SOCK_HTTP) {
@@ -125,20 +130,25 @@ void ls_accept_handler(ls_event_t* ev)
     worker->n_connections++;
 }
 
+/**
+ * @brief Handles the reading of data from a client's socket when using the http protocol and parses the message  
+ * @param ev Pointer to the event that is being handled 
+ */
 void ls_read_handler_http(ls_event_t *ev)
 {
     ls_connection_t* conn = ev->data;
+    /* */
     if(conn->closed) return;
     ls_http_ctx_t* http_ctx = (ls_http_ctx_t*)conn->protocol_ctx;
+    /* If there is another response still being generated do not start processing the next one as they must be returned in the order they were received */ 
     if(http_ctx->res_in_progress) return;
-    conn->expire_at = now_ms() + (5 * 1000);
     ls_http_request_t* req = http_ctx->req;
 
-    // calculate how much space is left
+    /* Ensure the size of the HTTP request doesn't exceed a maximum value */
     ssize_t remaining = LS_MAX_HTTP_SIZE - req->request_len;
     if (remaining <= 0) {
-        printf("request too large\n");
-        goto error; // request too large
+        printf("request too large in ls_read_handler_http()\n");
+        goto error;
     }
 
     size_t to_read = LS_READ_CHUNK < remaining ? LS_READ_CHUNK : remaining;
@@ -180,25 +190,22 @@ void ls_read_handler_http(ls_event_t *ev)
     }
 
     if (req->state == LS_HTTP_DONE) {
-        printf("Request for the resource: %.*s\n", (int)(req->path_end - req->path_start), (char *)req->path_start);
-
-        /* Generate a response here */
         ls_http_response_t* res = ls_build_http_response(http_ctx->pool, req, conn->worker->server);
+        if(res == NULL) {
+            printf("Error creating http response\n"); 
+        }
         http_ctx->res = res;
 
         http_ctx->res_in_progress = 1;
 
         ls_log_combined(res, conn);
 
-        conn->write_event.data = conn;
-        conn->write_event.handler = ls_write_handler_http;
         struct epoll_event ee;
         ee.events = EPOLLOUT;
         ee.data.ptr = &conn->write_event;
         if (epoll_ctl(conn->worker->epfd, EPOLL_CTL_MOD, conn->fd, &ee) == -1) {
           perror("epoll_ctl MOD");
           goto error;
-          return;
         }
     }
 
@@ -207,6 +214,16 @@ void ls_read_handler_http(ls_event_t *ev)
 
 error:
     (void)0; /* Stop weird warning about declaration after label? */
+
+    printf("Going to error path\n");
+
+    epoll_ctl(conn->worker->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
+    close(conn->fd);
+
+    conn->closed = 1;
+
+    ls_free_pool(http_ctx->pool);
+    ls_free_pool(conn->pool);
 
     size_t idx = conn->index;
     ls_worker_t* worker = conn->worker;
@@ -217,9 +234,6 @@ error:
         worker->connections[idx]->index = idx;
     }
     worker->n_connections--;
-
-    ls_free_pool(http_ctx->pool);
-    ls_close_connection(conn);
 
     return;
 }
@@ -240,7 +254,6 @@ static int ls_send_http_response(ls_connection_t* conn, ls_http_response_t* res)
             perror("send");
             return LS_HTTP_SEND_ERR;
         }
-        return LS_HTTP_SEND_ERR;
     }
 
     /* 2. Then send file */
@@ -253,11 +266,6 @@ static int ls_send_http_response(ls_connection_t* conn, ls_http_response_t* res)
                 res->file_fd = -1;
             }
             continue;
-        }
-        if (n == 0) {
-            close(res->file_fd);
-            res->file_fd = -1;
-            break;
         }
         if (n == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return LS_HTTP_SEND_AGAIN;
@@ -277,13 +285,18 @@ void ls_write_handler_http(ls_event_t* ev)
     ls_http_ctx_t* http_ctx = (ls_http_ctx_t*)conn->protocol_ctx;
     ls_http_response_t* res = http_ctx->res;
 
-    int rc = ls_send_http_response(conn, res);
+    int rc = LS_HTTP_SEND_AGAIN;
+    /* Handle this properly later */
+    while(rc == LS_HTTP_SEND_AGAIN) {
+        rc = ls_send_http_response(conn, res);
+    }
+   
 
     if (rc == LS_HTTP_SEND_OK) {
         /* finished sending: remove EPOLLOUT interest, cleanup response and close connection */
         struct epoll_event ee;
-        ee.events = EPOLLIN; /* or 0 if you want to stop monitoring; adjust for keep-alive */
-        ee.data.ptr = &conn->read_event; /* or conn, depending on how you store event data */
+        ee.events = EPOLLIN; 
+        ee.data.ptr = &conn->read_event; 
 
         /* modify to remove EPOLLOUT; use EPOLL_CTL_MOD if socket already registered */
         if (epoll_ctl(conn->worker->epfd, EPOLL_CTL_MOD, conn->fd, &ee) == -1) {
@@ -301,8 +314,9 @@ void ls_write_handler_http(ls_event_t* ev)
         http_ctx->req->raw_request = ls_palloc(http_ctx->pool, LS_MAX_HTTP_SIZE);
         http_ctx->req->cursor = http_ctx->req->raw_request;
         http_ctx->res_in_progress = 0;
+        conn->expire_at = now_ms() + (5 * 1000);
 
-    } else if(rc == LS_HTTP_SEND_ERR) {
+    } else { /* LS_HTTP_SEND_ERR */
         /* fatal error: cleanup */
         printf("FIX THIS\n");
         if (res->file_fd != -1) close(res->file_fd);
