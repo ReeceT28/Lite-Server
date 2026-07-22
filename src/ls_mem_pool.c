@@ -6,9 +6,10 @@
 
 size_t ls_page_size;
 
-void ls_init_alloc()
+int ls_init_alloc()
 {
     ls_page_size = sysconf(_SC_PAGE_SIZE);
+    return ls_page_size;
 }
 
 
@@ -50,7 +51,7 @@ ls_mem_pool_t* ls_init_mem_pool(size_t size)
 
     size_t block_size = align_ptr((uintptr_t)size, LS_POOL_ALIGNMENT);
 
-    void *mem = aligned_alloc(LS_POOL_ALIGNMENT, block_size);
+    void* mem = aligned_alloc(LS_POOL_ALIGNMENT, block_size);
 
     if(mem == NULL) {
         return NULL;
@@ -60,8 +61,8 @@ ls_mem_pool_t* ls_init_mem_pool(size_t size)
 
     uintptr_t block_start = align_ptr((uintptr_t)((u_char*)mem + sizeof(ls_mem_pool_t)), LS_POOL_ALIGNMENT);
     ls_pool_block_t* block = (ls_pool_block_t*)block_start;
-    block->next_free = (u_char *)align_ptr(block_start + sizeof(ls_pool_block_t), LS_POOL_ALIGNMENT);
-    block->end = (u_char *)mem + block_size;
+    block->next_free = (u_char*)align_ptr(block_start + sizeof(ls_pool_block_t), LS_POOL_ALIGNMENT);
+    block->end = (u_char*)mem + block_size;
     block->next = NULL;
     block->failed = 0;
 
@@ -76,9 +77,7 @@ ls_mem_pool_t* ls_init_mem_pool(size_t size)
 
 static void* alloc_block(ls_mem_pool_t* pool)
 {
-    // printf("Allocating new block \n");
     size_t block_size = pool->block_size;
-    // printf("Block size: %zu\n", block_size);
     ls_pool_block_t* block = (ls_pool_block_t*)aligned_alloc(LS_POOL_ALIGNMENT, block_size);
     if(block == NULL) {
         return NULL;
@@ -96,13 +95,12 @@ static void* small_palloc(ls_mem_pool_t* pool, size_t size)
 {
     ls_pool_block_t* block = pool->current;
     uintptr_t aligned = align_ptr((uintptr_t)block->next_free, LS_POOL_ALIGNMENT);
-    // printf("Free space: %zu \n", (uintptr_t)block->end - aligned);
     if((uintptr_t)block->end - aligned >= size) {
         block->next_free = (u_char*)aligned + size;
         return (void*)aligned;
     }
     else {
-        // Alternative approach is we can track number of failed allocs per block and move on if we get too many but still try ones with not too many fails.
+        /* Alternative approach is we can track number of failed allocs per block and move on if we get too many but still try ones with not too many fails. */
         return alloc_block(pool);
     }
 }

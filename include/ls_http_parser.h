@@ -97,7 +97,5 @@ enum {
 };
 
 
-void ls_http_parser_init();
-// const u_char* parse_request_line(const u_char* cursor, const u_char* end, ls_http_request_t* req, int* err_code, int state);
-// const u_char* parse_header_lines(const u_char *cursor, const u_char *end, ls_http_request_t* req, int *err_code, int state);
+int ls_http_parser_init();
 int ls_http_parse_request(ls_http_request_t* req);

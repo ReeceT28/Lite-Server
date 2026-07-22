@@ -658,9 +658,13 @@ done:
 
 static ls_trie_node_t* global_header_trie_root = NULL;
 
-void ls_http_parser_init()
+int ls_http_parser_init()
 {
     global_header_trie_root = ls_http_init_header_trie();
+    if(global_header_trie_root == NULL) {
+        return -1;
+    }
+    return 1;
 }
 
 /* This function is really bad for cache misses but every time I try to improve it becomes slower anyway */

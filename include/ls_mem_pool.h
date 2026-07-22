@@ -35,5 +35,5 @@ typedef struct ls_mem_pool_s {
 
 ls_mem_pool_t* ls_init_mem_pool(size_t size);
 void ls_free_pool(ls_mem_pool_t* pool);
-void ls_init_alloc();
+int ls_init_alloc();
 void* ls_palloc(ls_mem_pool_t* pool, size_t size);
