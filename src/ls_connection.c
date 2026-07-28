@@ -31,7 +31,7 @@ int ls_create_lstning_sock(ls_lstning_sock_t* sock)
 
 
     /* Set SO_REUSEADDR so that restarting the server is much faster, however apparently this can carry some risk, reference:
-     * https://stackoverflow.com/questions/3229860/what-is-the-meaning-of-so-reuseaddr-setsockopt-option-linux#3233022 
+     * https://stackoverflow.com/questions/3229860/what-is-the-meaning-of-so-reuseaddr-setsockopt-option-linux#3233022
      */
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
         const char* msg = "WARNING: Failed to set SO_REUSEADDR to true\n";
@@ -92,13 +92,16 @@ int ls_create_lstning_sock(ls_lstning_sock_t* sock)
 
     /* Start the socket listening */
     if (listen(fd, sock->config.backlog) == -1) {
-        perror("listen");
+        const char* msg = "WARNING: Failure starting the socket listening\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         close(fd);
         return -1;
     }
 
+    snprintf(foo, sizeof(foo), "DEBUG: Listening socket succesfully created on port %d\n", sock->config.port);
+    ls_log_write(log_cfg, foo, strlen(foo), LS_LOG_DEBUG);
+
     sock->fd = fd;
-    printf("Listening on port %d\n", sock->config.port);
     return 0;
 }
 

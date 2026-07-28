@@ -1,3 +1,4 @@
+#include <stdint.h>
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -13,6 +14,7 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <errno.h>
 #include "ls_http_parser.h"
 #include "ls_utils.h"
 #include "ls_mem_pool.h"
@@ -21,16 +23,19 @@
 #include "ls_logging.h"
 
 /**
- * @brief Computes the time remaining until epoll should timeout and the next connection should be timed out 
- * @param worker Pointer to the worker thread which the epoll loop is running on 
- * @return The epoll timeout in milliseconds
- */ 
+ * @brief Computes the time remaining until epoll should timeout and the next connection should be timed out
+ * @param worker Pointer to the worker thread which the epoll loop is running on
+ * @return On success the epoll timeout in milliseconds (or -1 for infinity), On failure -67
+ */
 static int compute_epoll_timeout(ls_worker_t* worker)
-{    	
+{
     if (worker->n_connections == 0)
-        return -1; 
+        return -1;
 
     uint64_t now = now_ms();
+    if(now == UINT64_MAX) {
+        return -67;
+    }
     uint64_t nearest = UINT64_MAX;
 
     for (size_t i = 0; i < worker->n_connections; ++i) {
@@ -38,7 +43,7 @@ static int compute_epoll_timeout(ls_worker_t* worker)
         if (conn->expire_at < nearest)
             nearest = conn->expire_at;
     }
-    
+
     if (nearest <= now)
         return 0;
 
@@ -46,9 +51,9 @@ static int compute_epoll_timeout(ls_worker_t* worker)
 }
 
 /**
- * @brief Expires any connections on a worker thread that should be timed out 
- * @param worker Pointer to the worker thread which the epoll loop is running on 
- */ 
+ * @brief Expires any connections on a worker thread that should be timed out
+ * @param worker Pointer to the worker thread which the epoll loop is running on
+ */
 static void ls_expire_connections(ls_worker_t* worker)
 {
     uint64_t now = now_ms();
@@ -78,29 +83,42 @@ static void ls_expire_connections(ls_worker_t* worker)
     }
 }
 
-/** 
- * @brief runs the event loop for a worker thread 
- * @param worker Pointer to the worker thread which the epoll loop is running on 
- */ 
-void run_event_loop(ls_worker_t* worker) {
+/**
+ * @brief runs the event loop for a worker thread
+ * @param worker Pointer to the worker thread which the epoll loop is running on
+ */
+static void run_event_loop(ls_worker_t* worker) {
     /* Array to store events fetched by epoll_wait */
     struct epoll_event events[1024];
+    ls_log_cfg_t* log_cfg = worker->server->log_cfg;
 
     while (1) {
         /* Compute maximum timeout to wait for events before moving on to expire connections */
         int timeout = compute_epoll_timeout(worker);
-        int n = epoll_wait(worker->epfd, events, 1024, timeout);
-        if (n == -1) {
-            perror("Error on epoll_wait in run_event_loop");
-            break;
+        if(timeout == -67) {
+            const char* msg  = "WARNING: compute_epoll_timeout failed \n";
+            ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_ERROR);
         }
+
+        /* Wait for epoll to return any events to be handled or until timeout is reached */
+        int n = epoll_wait(worker->epfd, events, 1024, timeout);
+        if (n == -1 && errno != EINTR) {
+            const char* msg = "ERROR: epoll_wait failed and errno != EINTR, this SHOULD NOT happen\n";
+            ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_ERROR);
+            return;
+        }
+
         /* Handle every event fetched by epoll_wait */
         for (int i = 0; i < n; ++i) {
             ls_event_t* ev = (ls_event_t*)events[i].data.ptr;
             if (ev && ev->handler) {
                 ev->handler(ev);
             }
+            else {
+
+            }
         }
+
         /* Expires connections that should be timed out */
         ls_expire_connections(worker);
     }
@@ -138,13 +156,13 @@ int main()
     /* Create a worker for the server */
     ls_mem_pool_t* worker_pool = ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
     if(worker_pool == NULL) {
-        char* msg = "ERROR: Failed to create memory pool for server worker\n";
+        const char* msg = "ERROR: Failed to create memory pool for server worker\n";
         ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
         return -1;
     }
     ls_worker_t* worker = ls_palloc(worker_pool, sizeof(ls_worker_t));
     if(worker == NULL) {
-        char* msg = "ERROR: Failed to allocate memory to create server worker\n";
+        const char* msg = "ERROR: Failed to allocate memory to create server worker\n";
         ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
         return -1;
     }
@@ -155,14 +173,14 @@ int main()
     /* This approach might eat up a lot of memory but I think it should still be negligible for a modern system and I think is a good approach for prioritising fast responses */
     worker->connections = ls_palloc(worker_pool, sizeof(ls_connection_t*) * worker->max_connections);
     if(worker->connections == NULL) {
-        char* msg = "ERROR: Failed to allocate memory to initialise connection pool for server worker\n"; 
+        const char* msg = "ERROR: Failed to allocate memory to initialise connection pool for server worker\n";
         ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
         return -1;
     }
     for(size_t i=0; i<worker->max_connections; ++i){
         worker->connections[i] = ls_palloc(worker_pool, sizeof(ls_connection_t));
         if(worker->connections[i] == NULL){
-            char* msg = "ERROR: Failed to allocate memory when creating a connection for the connection pool\n"; 
+            const char* msg = "ERROR: Failed to allocate memory when creating a connection for the connection pool\n";
             ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
             return -1;
         }
@@ -171,7 +189,7 @@ int main()
     /* Create the array of listening sockets */
     server_context->lstning_sockets = ls_create_array(server_pool, sizeof(ls_lstning_sock_t), 1);
     if(server_context->lstning_sockets == NULL) {
-        char* msg = "ERROR: Failed to create array for server's listening sockets\n"; 
+        const char* msg = "ERROR: Failed to create array for server's listening sockets\n";
         ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
         return -1;
     }
@@ -179,7 +197,7 @@ int main()
     /* Configure the socket to listen on the worker */
     ls_lstning_sock_t* sock = (ls_lstning_sock_t*)ls_array_push(server_context->lstning_sockets);
     if(sock == NULL) {
-        char* msg = "ERROR: Failed to push listening socket to the server's array\n"; 
+        const char* msg = "ERROR: Failed to push listening socket to the server's array\n";
         ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
         return -1;
     }
@@ -195,7 +213,7 @@ int main()
 
     /* Actually creates the listening socket and stores fd under sock->fd */
     if(ls_create_lstning_sock(sock) == -1) {
-        char* msg = "ERROR: Failed to create listening socket\n"; 
+        const char* msg = "ERROR: Failed to create listening socket to start server\n";
         ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
         return -1;
     }
@@ -203,8 +221,9 @@ int main()
     /* Set epoll up for the worker */
     int epfd = epoll_create1(0);
     if (epfd == -1) {
-      perror("epoll_create1 in main.c");
-      return -1;
+        const char* msg = "ERROR: Failed to create epoll instance for server\n";
+        ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
+        return -1;
     }
 
     /* Assign epfd to the worker */
@@ -212,6 +231,11 @@ int main()
 
     /* Create event struct used for accepting connections on the listening socket */
     ls_event_t* ev = ls_palloc(worker_pool, sizeof(ls_event_t));
+    if(ev == NULL) {
+        const char* msg = "ERROR: Failed to allocate memory for listening socket accept handler\n";
+        ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
+        return -1;
+    }
     ev->data = sock;
     ev->handler = ls_accept_handler;
 
@@ -222,13 +246,19 @@ int main()
 
     /* Monitor the epoll_event in the epoll loop */
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, sock->fd, &ee) == -1) {
-      perror("epoll_ctl in main.c");
-      return -1;
+        const char* msg = "ERROR: Failed to add listening socket to be monitored by epoll instance\n";
+        ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
+        return -1;
     }
 
     /* Set the root directory where web server's files will be accessed from */
     char abs_root[PATH_MAX];
-    realpath("/var/www/my_site/cv-site", abs_root);
+    if(realpath("/var/www/my_site/cv-site", abs_root) == NULL) {
+        const char* msg = "ERROR: Failed to resolve the path for the servers root directory\n";
+        ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
+        return -1;
+    }
+
     ls_set_root_dir(server_context, abs_root);
 
     /* Run the event loop */

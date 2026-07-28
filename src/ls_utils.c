@@ -6,6 +6,8 @@
 uint64_t now_ms()
 {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    if(clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
+        return UINT64_MAX;
+    }
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }

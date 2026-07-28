@@ -1,4 +1,3 @@
-#include <string.h>
 #include "ls_server.h"
 
 
