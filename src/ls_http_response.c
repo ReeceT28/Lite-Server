@@ -33,7 +33,6 @@ static void ls_write_status_line(ls_http_response_t* res, int http_major, int ht
 
 static void ls_handle_get(ls_http_request_t* req, ls_http_response_t* res, ls_server_context_t* server)
 {
-
     if (req->http_major != 1 || req->http_minor != 1) {
         res->status = 505;
         ls_write_status_line(res, 1, 1, 505, "HTTP Version Not Supported");

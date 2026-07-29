@@ -8,7 +8,7 @@
 typedef struct ls_socket_conf_s {
     int family;
     int socktype;
-    const char *host;
+    const char* host;
     uint16_t port;
     int backlog;
     int type;
@@ -35,6 +35,7 @@ typedef struct ls_connection_s {
     ls_mem_pool_t* pool;
     ls_worker_t* worker;
     void* protocol_ctx;
+    char* host_name;
     uint64_t expire_at;
     size_t index;
     int closed;

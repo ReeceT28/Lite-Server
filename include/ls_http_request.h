@@ -75,6 +75,7 @@ typedef struct {
     const u_char* header_name_end; 
     const u_char* header_value_start;
     const u_char* header_value_end;
+    const u_char* request_end;
     int header_id;
     unsigned long header_hash;
     /* traversal pointer */

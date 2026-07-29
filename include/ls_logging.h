@@ -12,12 +12,12 @@
 #define LS_LOG_ENABLED          1<<0 /* Enable logging*/
 #define LS_LOG_FORMAT_COMBINED  1<<1 /* Use Combined Log Format for HTTP request logging */
 #define LS_LOG_DEBUG            1<<2 /* Enable logging of information that could be useful when debugging errors */
-#define LS_LOG_EVENT_CONNECTION 1<<3 /* Log whenever the server receives a connection request*/
+#define LS_LOG_EVENT_CONNECT 1<<3 /* Log whenever the server receives a connection request*/
 #define LS_LOG_EVENT_DISCONNECT 1<<4 /* Log disconnections */
 #define LS_LOG_ERROR            1<<5 /* Log errors */
 #define LS_LOG_WARNING          1<<6 /* Log events that shouldn't cause execution of the program to stop but shouldn't normally occur if the program is behaving as intended */
 
-#define LS_LOG_INFO (LS_LOG_FORMAT_COMBINED | LS_LOG_EVENT_DISCONNECT)
+#define LS_LOG_INFO (LS_LOG_FORMAT_COMBINED | LS_LOG_EVENT_DISCONNECT | LS_LOG_EVENT_CONNECT) /* Enables logging of most basic information for a web server, recommended to always be on */
 
 typedef struct ls_log_cfg_s{
     uint32_t log_cfgs;
@@ -30,4 +30,5 @@ int ls_log_init(uint32_t log_cfgs, const char* file_path, ls_server_context_t* s
 int ls_log_close(ls_log_cfg_t* log);
 void ls_log_write(ls_log_cfg_t* log, const char* data, size_t len, uint32_t event_flag);
 void ls_log_combined(ls_http_response_t* res, ls_connection_t* conn);
-void ls_log_disconnect(int fd, ls_log_cfg_t* log);
+void ls_log_connect(ls_connection_t* connection, ls_log_cfg_t* log);
+void ls_log_disconnect(ls_connection_t* connection, ls_log_cfg_t* log);

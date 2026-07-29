@@ -1,5 +1,5 @@
-#include <stdint.h>
 #define _GNU_SOURCE
+#include <stdint.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include "ls_http_parser.h"
 #include "ls_utils.h"
 #include "ls_mem_pool.h"
@@ -53,19 +54,44 @@ static int compute_epoll_timeout(ls_worker_t* worker)
 /**
  * @brief Expires any connections on a worker thread that should be timed out
  * @param worker Pointer to the worker thread which the epoll loop is running on
+ * @return On success 0, On failure -1
  */
-static void ls_expire_connections(ls_worker_t* worker)
+static int ls_expire_connections(ls_worker_t* worker)
 {
     uint64_t now = now_ms();
+    if(now == UINT64_MAX) {
+        return -1;
+    }
 
     for (size_t i = 0; i < worker->n_connections; ++i) {
         ls_connection_t* conn = worker->connections[i];
-
         if (conn->expire_at <= now) {
+            conn->closed = 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * @brief Closes connections on a worker thread, by finalising the closing of all connections in this function less code is repeated and will make errors caused by closing connections incorrectly less likely 
+ * @param worker Pointer to the worker thread which connections will be expired on
+ * @return On success 0, On failure -1
+ */
+static int ls_close_connections(ls_worker_t* worker)
+{
+    ls_log_cfg_t* log_cfg = worker->server->log_cfg;
+    for (size_t i = 0; i < worker->n_connections; ++i) {
+        ls_connection_t* conn = worker->connections[i];
+        if(conn->closed) {
             /* Logs disconnect if the server is configured to do so */
-            ls_log_disconnect(conn->fd, worker->server->log_cfg);
+            ls_log_disconnect(conn, log_cfg);
             epoll_ctl(worker->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
             close(conn->fd);
+
+            /* NOTICE: This is http specific right now but in the future if I add more protocols I will likely just make some protocol_ctx template with a memory pool for the context
+             * and a void* to the specific protocol context struct as almost all protocols will need to dynamically allocate memory and if not its only one wasted pointer to the memory pool
+             */
+
             /* Free all of the memory associated with the connection */
             ls_http_ctx_t* http_ctx = (ls_http_ctx_t*)conn->protocol_ctx;
             ls_free_pool(http_ctx->pool);
@@ -81,6 +107,7 @@ static void ls_expire_connections(ls_worker_t* worker)
             --i;
         }
     }
+    return 0;
 }
 
 /**
@@ -96,7 +123,7 @@ static void run_event_loop(ls_worker_t* worker) {
         /* Compute maximum timeout to wait for events before moving on to expire connections */
         int timeout = compute_epoll_timeout(worker);
         if(timeout == -67) {
-            const char* msg  = "WARNING: compute_epoll_timeout failed \n";
+            const char* msg  = "WARNING: compute_epoll_timeout failed\n";
             ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_ERROR);
         }
 
@@ -115,17 +142,19 @@ static void run_event_loop(ls_worker_t* worker) {
                 ev->handler(ev);
             }
             else {
-
+                const char* msg = "ERROR: Event fetched from epoll was NULL or its handler was\n";
+                ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_ERROR);
             }
         }
 
-        /* Expires connections that should be timed out */
         ls_expire_connections(worker);
+        ls_close_connections(worker);
     }
 }
 
 int main()
 {
+    signal(SIGPIPE,SIG_IGN);
     /* Initialise core modules */
     if(ls_http_parser_init() == -1) {
         fprintf(stderr, "ERROR: Failed to initialise the http parsing module when creating the trie for header parsing");
@@ -268,6 +297,7 @@ int main()
     ls_log_close(server_context->log_cfg);
     ls_free_pool(server_pool);
     ls_free_pool(worker_pool);
+    printf("CLOSING SERVER \n");
     return 0;
 }
 

@@ -712,8 +712,7 @@ static inline int parse_ows(const u_char* cursor, const u_char* end, ls_http_req
 {
     while(cursor < end && (*cursor == ' ' || *cursor == '\t'))
         ++cursor;
-    if(cursor >= end)
-    {
+    if(cursor >= end) {
         req->cursor = cursor;
         return LS_ERR_NEED_MORE_CHARS;
     }
@@ -742,6 +741,8 @@ static inline int parse_header_value(const u_char* cursor, const u_char* end, ls
                 req->cursor = cursor - 1;
                 return LS_ERR_NEED_MORE_CHARS;
             }
+            /* Bad request because \r should always be followed by \n */
+            return LS_ERR_BAD_REQUEST;
         }
         else if(*cursor == '\n') {
             req->header_value_end = cursor;
@@ -786,7 +787,7 @@ static inline int check_eohs(const u_char* cursor, const u_char* end, ls_http_re
         req->state = LS_HTTP_END_OF_HEADERS;
         return LS_ERR_OKAY;
     }
-    return LS_ERR_OKAY;
+    return LS_ERR_BAD_REQUEST;
 }
 
 static inline int parse_header_line( const u_char* cursor, const u_char* end, ls_http_request_t* req)
@@ -852,6 +853,7 @@ static int parse_header_lines(const u_char* cursor, const u_char* end, ls_http_r
         
         // After storing, check if we've reached end of headers
         if (req->state == LS_HTTP_END_OF_HEADERS) {
+            req->request_end = req->cursor;
             return LS_ERR_OKAY;
         }
         

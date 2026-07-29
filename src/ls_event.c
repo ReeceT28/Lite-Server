@@ -1,4 +1,3 @@
-#include "ls_event.h"
 #include <sys/sendfile.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -6,6 +5,7 @@
 #include <stdio.h>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include "ls_event.h"
 #include "ls_http_parser_test.h"
 #include "ls_utils.h"
 #include "ls_http_parser.h"
@@ -24,13 +24,15 @@ void ls_accept_handler(ls_event_t* ev)
 {
     ls_lstning_sock_t* sock = (ls_lstning_sock_t*)ev->data;
     ls_worker_t* worker = sock->worker;
+    ls_log_cfg_t* log_cfg = worker->server->log_cfg;
 
     /* Accept the connection request */
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
     int client_fd = accept(sock->fd, (struct sockaddr*)&client_addr, &client_len);
     if (client_fd == -1) {
-        perror("accept() in ls_accept_handler");
+        const char* msg = "WARNING: Failed to accept connection in ls_accept_handler\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         return;
     }
 
@@ -38,7 +40,8 @@ void ls_accept_handler(ls_event_t* ev)
     int flags = fcntl(client_fd, F_GETFL, 0);
     if (flags == -1) {
         close(client_fd);
-        perror("fcntl() in ls_accept_handler");
+        const char* msg = "WARNING: Failed to get status flags of the client's socket in ls_accept_handler\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         return;
     }
 
@@ -46,14 +49,16 @@ void ls_accept_handler(ls_event_t* ev)
     flags = flags | O_NONBLOCK;
     if(fcntl(client_fd, F_SETFL, flags) == -1) {
         close(client_fd);
-        perror("fcntl() in ls_accept_handler");
+        const char* msg = "WARNING: Failed to set client socket to non-blocking\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         return;
     }
 
     size_t idx = worker->n_connections;
     if (idx >= worker->max_connections) {
         close(client_fd);
-        printf("Worker has reached maximum number of connections \n");
+        const char* msg = "WARNING: Maximum number of connections reached for a worker\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         return;
     }
 
@@ -64,8 +69,9 @@ void ls_accept_handler(ls_event_t* ev)
     /* Create a memory pool to store anything related to the connection */
     ls_mem_pool_t* pool = ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
     if(pool == NULL){
-        printf("Error creating memory pool in ls_accept_handler\n");
         close(client_fd);
+        const char* msg = "WARNING: Failed to initialise memory pool for connection\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         return;
     }
 
@@ -87,14 +93,16 @@ void ls_accept_handler(ls_event_t* ev)
         if(http_ctx == NULL){
             close(client_fd);
             ls_free_pool(pool);
-            printf("Error creating http_ctx in ls_accept_handler\n");
+            const char* msg = "WARNING: Failed to allocate memory for http context\n";
+            ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
             return;
         }
         http_ctx->pool = ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
         if(http_ctx->pool == NULL) {
             close(client_fd);
             ls_free_pool(pool);
-            printf("Error creating pool for http_ctx in ls_accept_handler\n");
+            const char* msg = "WARNING: Failed to initialise memory pool for http context\n";
+            ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         }
         http_ctx->req = ls_create_request(http_ctx->pool);
         http_ctx->res = NULL;
@@ -105,9 +113,10 @@ void ls_accept_handler(ls_event_t* ev)
         http_ctx->res_in_progress = 0;
     }
     else {
-        printf("Unsupported protocol type\n");
         close(client_fd);
         ls_free_pool(pool);
+        const char* msg = "WARNING: Listening socket protocol is not yet supported\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         return;
     }
 
@@ -118,16 +127,18 @@ void ls_accept_handler(ls_event_t* ev)
 
     /* Monitor the client's socket with epoll */
     if (epoll_ctl(worker->epfd, EPOLL_CTL_ADD, client_fd, &ee) == -1) {
-        perror("epoll_ctl in ls_accept_handler");
         if(sock->config.type == LS_SOCK_HTTP) {
             ls_free_pool(((ls_http_ctx_t*)conn->protocol_ctx)->pool);
         }
         close(client_fd);
         ls_free_pool(pool);
+        const char* msg = "WARNING: Failed to add client to be monitored by epoll intsance\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         return;
     };
     /* Increment number of connections on the worker by 1 */
     worker->n_connections++;
+    ls_log_connect(conn, worker->server->log_cfg);
 }
 
 /**
@@ -137,10 +148,8 @@ void ls_accept_handler(ls_event_t* ev)
 void ls_read_handler_http(ls_event_t *ev)
 {
     ls_connection_t* conn = ev->data;
-    /* */
     if(conn->closed) return;
     ls_http_ctx_t* http_ctx = (ls_http_ctx_t*)conn->protocol_ctx;
-    /* If there is another response still being generated do not start processing the next one as they must be returned in the order they were received */ 
     if(http_ctx->res_in_progress) return;
     ls_http_request_t* req = http_ctx->req;
 
@@ -190,13 +199,22 @@ void ls_read_handler_http(ls_event_t *ev)
     }
 
     if (req->state == LS_HTTP_DONE) {
+        /* Add a way to detect if the read() has gone past the end of a message boundary to suppport http 1.1 pipelining */ 
+        u_char* new_end = req->raw_request + req->request_len;
+        printf("NEW END: %p, REQ END: %p\n", new_end, req->request_end);
+        printf("NEW END: %d, REQ END: %d\n", *new_end, *req->request_end);
+        if(req->request_end != new_end) {
+            /* This means that read() returned more than the http request currently being processed - should only be possible using pipelining */
+        }
+        else{
+            printf("GOOD!\n"); 
+        }
         ls_http_response_t* res = ls_build_http_response(http_ctx->pool, req, conn->worker->server);
         if(res == NULL) {
             printf("Error creating http response\n"); 
         }
         http_ctx->res = res;
 
-        http_ctx->res_in_progress = 1;
 
         ls_log_combined(res, conn);
 
@@ -217,23 +235,7 @@ error:
 
     printf("Going to error path\n");
 
-    epoll_ctl(conn->worker->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
-    close(conn->fd);
-
     conn->closed = 1;
-
-    ls_free_pool(http_ctx->pool);
-    ls_free_pool(conn->pool);
-
-    size_t idx = conn->index;
-    ls_worker_t* worker = conn->worker;
-
-    size_t last = worker->n_connections - 1;
-    if (idx != last) {
-        worker->connections[idx] = worker->connections[last];
-        worker->connections[idx]->index = idx;
-    }
-    worker->n_connections--;
 
     return;
 }
@@ -321,8 +323,7 @@ void ls_write_handler_http(ls_event_t* ev)
         printf("FIX THIS\n");
         if (res->file_fd != -1) close(res->file_fd);
         http_ctx->res = NULL;
-        ls_free_pool(conn->pool);
-        close(conn->fd);
+        conn->closed = 1;
     }
     return;
 }

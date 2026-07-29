@@ -149,29 +149,14 @@ void ls_log_combined(ls_http_response_t* res, ls_connection_t* conn)
     }
 }
 
-void ls_log_disconnect(int fd, ls_log_cfg_t* log)
+void ls_log_disconnect(ls_connection_t* connection, ls_log_cfg_t* log)
 {
     if(!((log->log_cfgs & LS_LOG_ENABLED) && (log->log_cfgs & LS_LOG_EVENT_DISCONNECT))) return;
-
-    struct sockaddr_storage ss;
-    socklen_t len = sizeof(ss);
-    if (getpeername(fd, (struct sockaddr*)&ss, &len) == -1) {
-        const char* msg = "WARNING: Failed to get address of peer when building disconnection message\n";
-        ls_log_write(log, msg, strlen(msg), LS_LOG_WARNING);
-        return;
-    }
-
-    char host[NI_MAXHOST];
-    if (getnameinfo((struct sockaddr*)&ss, len, host, sizeof(host), NULL, 0, NI_NUMERICHOST) != 0) {
-        const char* msg = "WARINNG: Failed to convert address of peer into text format when building disconnection message\n"; 
-        ls_log_write(log, msg, strlen(msg), LS_LOG_WARNING);
-        return;
-    }
-
+    /* WARNING WARNING WARNING NEED TO DO SOMETHING ABOUT DISCONNECT ONLY WORKING IF CONNECTION LOG RUNS */
     time_t now = time(NULL);
     struct tm tm;
     if (localtime_r(&now, &tm) == NULL) {
-        const char* msg = "WARNING: Failed to create time representation when building disconnection message\n"; 
+        const char* msg = "WARNING: Failed to create time representation when building disconnection log message\n"; 
         ls_log_write(log, msg, strlen(msg), LS_LOG_WARNING);
         return;
     }
@@ -179,12 +164,74 @@ void ls_log_disconnect(int fd, ls_log_cfg_t* log)
     char timestr[64];
     strftime(timestr, sizeof(timestr), "%d/%b/%Y:%H:%M:%S %z", &tm);
 
-    size_t needed = strlen(host) + strlen(" has disconnected from the server at: ") + strlen(timestr) + 2;
+    size_t needed = strlen(connection->host_name) + strlen(" has disconnected from the server at: ") + strlen(timestr) + 2;
     char out[needed];
 
-    int written = snprintf(out, needed, "%s%s%s\n", host, " has disconnected from the server at: ", timestr);
+    int written = snprintf(out, needed, "%s%s%s\n", connection->host_name, " has disconnected from the server at: ", timestr);
     if (written < 0) {
-        const char* msg = "WARNING: Failed to build final message when building disconnection message\n";
+        const char* msg = "WARNING: Failed to build final message when building disconnection log message\n";
+        ls_log_write(log, msg, strlen(msg), LS_LOG_WARNING);
+        return;
+    }
+
+
+    size_t send_len;
+    if ((size_t)written < needed)
+      send_len = (size_t)written; 
+    else
+      send_len = needed - 1; 
+
+    if(ls_log_write_nocheck(log, out, send_len) == -1) {
+        ls_log_failure(log, out, send_len); 
+    }
+}
+
+void ls_log_connect(ls_connection_t* connection, ls_log_cfg_t* log)
+{
+    if(!((log->log_cfgs & LS_LOG_ENABLED) && (log->log_cfgs & LS_LOG_EVENT_CONNECT))) return;
+
+    int fd = connection->fd;
+    struct sockaddr_storage ss;
+    socklen_t len = sizeof(ss);
+    if (getpeername(fd, (struct sockaddr*)&ss, &len) == -1) {
+        const char* msg = "WARNING: Failed to get address of peer when building connection log message\n";
+        ls_log_write(log, msg, strlen(msg), LS_LOG_WARNING);
+        return;
+    }
+
+    char host[NI_MAXHOST];
+    if (getnameinfo((struct sockaddr*)&ss, len, host, sizeof(host), NULL, 0, NI_NUMERICHOST) != 0) {
+        const char* msg = "WARINNG: Failed to convert address of peer into text format when building connection log message\n"; 
+        ls_log_write(log, msg, strlen(msg), LS_LOG_WARNING);
+        return;
+    }
+
+    ls_mem_pool_t* pool = connection->pool;
+    connection->host_name = ls_palloc(pool, strlen(host));
+    if(connection->host_name == NULL) {
+        const char* msg = "WARNING: Failed to allocate memory for the host name when building connection log message\n"; 
+        ls_log_write(log, msg, strlen(msg), LS_LOG_WARNING);
+        return;
+    }
+    snprintf(connection->host_name, strlen(host), "%s", host);
+    
+    time_t now = time(NULL);
+    struct tm tm;
+    if (localtime_r(&now, &tm) == NULL) {
+        const char* msg = "WARNING: Failed to create time representation when building connection log message\n"; 
+        ls_log_write(log, msg, strlen(msg), LS_LOG_WARNING);
+        return;
+    }
+
+    char timestr[64];
+    strftime(timestr, sizeof(timestr), "%d/%b/%Y:%H:%M:%S %z", &tm);
+
+    size_t needed = strlen(host) + strlen(" has connected to the server at: ") + strlen(timestr) + 2;
+    char out[needed];
+
+    int written = snprintf(out, needed, "%s%s%s\n", host, " has connected to the server at: ", timestr);
+    if (written < 0) {
+        const char* msg = "WARNING: Failed to build final message when building connection log message\n";
         ls_log_write(log, msg, strlen(msg), LS_LOG_WARNING);
         return;
     }
@@ -217,22 +264,24 @@ int ls_log_close(ls_log_cfg_t* log)
     return 0;
 }
 
-int ls_log_write(ls_log_cfg_t* log, const char* data, size_t len, uint32_t event_flag)
+void ls_log_write(ls_log_cfg_t* log, const char* data, size_t len, uint32_t event_flag)
 {
     (void)log; (void)data; (void)len; (void)event_flag;
-    return 0;
 }
 
-int ls_log_disconnect(int fd, ls_log_cfg_t* log)
+void ls_log_disconnect(int fd, ls_log_cfg_t* log)
 {
     (void)fd; (void)log;
-    return 0;
 }
 
-int ls_log_combined(ls_http_response_t* res, ls_connection_t* conn)
+void ls_log_connect(ls_connection_t* connection, ls_log_cfg_t* log)
+{
+    (void)connection; (void)log; 
+}
+
+void ls_log_combined(ls_http_response_t* res, ls_connection_t* conn)
 {
     (void)res; (void)conn;
-    return 0;
 }
 
 #endif
