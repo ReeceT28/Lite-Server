@@ -86,7 +86,7 @@ static void* alloc_block(ls_mem_pool_t* pool)
     pool->current = block;
     block->failed = 0;
     block->next = NULL;
-    block->end = (u_char*)block + block_size; 
+    block->end = (u_char*)block + block_size;
     block->next_free = (u_char*)align_ptr((uintptr_t)block + sizeof(ls_pool_block_t),LS_POOL_ALIGNMENT);
     return block->next_free;
 }
@@ -101,7 +101,9 @@ static void* small_palloc(ls_mem_pool_t* pool, size_t size)
     }
     else {
         /* Alternative approach is we can track number of failed allocs per block and move on if we get too many but still try ones with not too many fails. */
-        return alloc_block(pool);
+        void* ptr = alloc_block(pool);
+        pool->current->next_free = ptr + size;
+        return ptr;
     }
 }
 
@@ -110,7 +112,7 @@ static void* large_palloc(ls_mem_pool_t* pool, size_t size)
     ls_pool_large_t* lrg_ptr = malloc(sizeof(ls_pool_large_t));
     if(lrg_ptr == NULL) return NULL;
     lrg_ptr->alloc = malloc(size);
-    if(lrg_ptr->alloc == NULL) { 
+    if(lrg_ptr->alloc == NULL) {
         free(lrg_ptr);
         return NULL;
     }

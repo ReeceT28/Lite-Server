@@ -5,9 +5,10 @@
 #include <stdio.h>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <malloc.h>
 #include "ls_event.h"
-#include "ls_http_parser_test.h"
 #include "ls_utils.h"
+#include "ls_http_parser_test.h"
 #include "ls_http_parser.h"
 #include "ls_http_request.h"
 #include "ls_connection.h"
@@ -17,8 +18,8 @@
 #include "ls_logging.h"
 
 /**
- * @brief Accepts connections from clients to a listening socket 
- * @param ev Pointer to the event that is being handled 
+ * @brief Accepts connections from clients to a listening socket
+ * @param ev Pointer to the event that is being handled
  */
 void ls_accept_handler(ls_event_t* ev)
 {
@@ -142,22 +143,53 @@ void ls_accept_handler(ls_event_t* ev)
 }
 
 /**
- * @brief Handles the reading of data from a client's socket when using the http protocol and parses the message  
- * @param ev Pointer to the event that is being handled 
+ * @brief Handles the reading of data from a client's socket when using the http protocol and parses the message
+ * @param ev Pointer to the event that is being handled
  */
 void ls_read_handler_http(ls_event_t *ev)
 {
     ls_connection_t* conn = ev->data;
     if(conn->closed) return;
     ls_http_ctx_t* http_ctx = (ls_http_ctx_t*)conn->protocol_ctx;
-    if(http_ctx->res_in_progress) return;
     ls_http_request_t* req = http_ctx->req;
+    ls_http_response_t* res = NULL;
+    ls_log_cfg_t* log_cfg = conn->worker->server->log_cfg;
 
-    /* Ensure the size of the HTTP request doesn't exceed a maximum value */
+    if(req->receival_time == 0) {
+        req->receival_time = now_ms();
+        if(req->receival_time == UINT64_MAX) {
+            const char* msg = "WARNING: Error getting time when recording receival of HTTP request\n";
+            ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
+            goto error;
+        }
+    }
+    else {
+        uint64_t time = now_ms();
+        if(time == UINT64_MAX) {
+            const char* msg = "WARNING: Error getting time when testing processing time of HTTP request\n";
+            ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
+            goto error;
+        }
+        /* 2 second maximum time for now to prevent slowloris */
+        if(time - req->receival_time > 2 * 1000) {
+            const char* msg = "WARNING: HTTP request took over the maximum time to complete parsing, possible slowloris attack attempt\n";
+            ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
+            conn->closed = 1;
+            return;
+            res = ls_build_simple_http_response(http_ctx->pool, req, 408, "Request Timeout");
+            goto res_done;
+        }
+    }
+
+    /* Ensure the size of the HTTP request doesn't exceed a maximum value - this could cause innacuracies when using HTTP 1.1 pipelining but basically nothing uses it */
     ssize_t remaining = LS_MAX_HTTP_SIZE - req->request_len;
     if (remaining <= 0) {
-        printf("request too large in ls_read_handler_http()\n");
-        goto error;
+        const char* msg = "WARNING: HTTP request size has exceeded the maximum - possible malicious request\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
+            conn->closed = 1;
+            return;
+        res = ls_build_simple_http_response(http_ctx->pool, req, 413, "Content Too Large");
+        goto res_done;
     }
 
     size_t to_read = LS_READ_CHUNK < remaining ? LS_READ_CHUNK : remaining;
@@ -165,79 +197,85 @@ void ls_read_handler_http(ls_event_t *ev)
 
     ssize_t n = read(conn->fd, curr_end, to_read);
 
-    if (n == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return;
-        }
-        perror("read() in ls_read_handler_http");
+    if (n == -1 && (errno != EAGAIN && errno!= EWOULDBLOCK)) {
+        const char* msg = "WARNING: Error when attempting to read from client's socket\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         goto error;
     }
 
-
-    // update buffer length
     req->request_len += n;
 
     if (req->request_len < LS_MAX_HTTP_SIZE) {
         req->raw_request[req->request_len] = '\0';
     } else {
-        printf("request too large\n");
-        goto error; // request too large
+        const char* msg = "WARNING: HTTP request size has exceeded the maximum - possible malicious request\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
+            conn->closed = 1;
+            return;
+        res = ls_build_simple_http_response(http_ctx->pool, req, 413, "Content Too Large");
+        goto res_done;
     }
 
-    // parse whatever we have so far
+    /* Parse whatever has been received so far */
     int err_code = ls_http_parse_request(req);
 
     if (err_code != LS_ERR_OKAY) {
         if (err_code == LS_ERR_NEED_MORE_CHARS) {
-            // parser wants more data, just return
-            // next readable event will call this function again
+            /* This function will be called again next time more characters are available */
             return;
         }
-        // ls_print_parsed_request(req);
-        printf("bad error\n");
+        const char* msg = "WARNING: Error during parsing of http request\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
+        /* CHECK OTHER ERRORS HERE FOR RESPONSE CODES */
+        if(err_code == LS_ERR_BAD_REQUEST) {
+            // ls_print_parsed_request(req);
+//          /* TEMPORARYYYYYYYYYYYYYYYYYYYYYYYYY*/
+
+            conn->closed = 1;
+            return;
+            res = ls_build_simple_http_response(http_ctx->pool, req, 400, "Bad Request");
+            goto res_done;
+        }
+        else if(err_code == LS_ERR_TOO_MANY_HEADERS) {
+            conn->closed = 1;
+            return;
+            res = ls_build_simple_http_response(http_ctx->pool, req, 431, "Request Header Fields Too Large");
+            goto res_done;
+        }
+        /* Only other is internal failure */
         goto error;
     }
 
     if (req->state == LS_HTTP_DONE) {
-        /* Add a way to detect if the read() has gone past the end of a message boundary to suppport http 1.1 pipelining */ 
-        u_char* new_end = req->raw_request + req->request_len;
-        printf("NEW END: %p, REQ END: %p\n", new_end, req->request_end);
-        printf("NEW END: %d, REQ END: %d\n", *new_end, *req->request_end);
-        if(req->request_end != new_end) {
-            /* This means that read() returned more than the http request currently being processed - should only be possible using pipelining */
-        }
-        else{
-            printf("GOOD!\n"); 
-        }
-        ls_http_response_t* res = ls_build_http_response(http_ctx->pool, req, conn->worker->server);
+        res = ls_build_http_response(http_ctx->pool, req, conn->worker->server);
+res_done:
         if(res == NULL) {
-            printf("Error creating http response\n"); 
+            const char* msg = "WARNING: Error generating a response to http request\n";
+            ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
+            conn->closed = 1;
+            return;
         }
+
         http_ctx->res = res;
-
-
-        ls_log_combined(res, conn);
-
         struct epoll_event ee;
         ee.events = EPOLLOUT;
         ee.data.ptr = &conn->write_event;
         if (epoll_ctl(conn->worker->epfd, EPOLL_CTL_MOD, conn->fd, &ee) == -1) {
-          perror("epoll_ctl MOD");
-          goto error;
+            const char* msg = "WARNING: Error when modifying client socket to swap to being monitored for write readiness by epoll\n";
+            ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
+            conn->closed = 1;
+            return;
         }
     }
 
-    // if more data is available, the event loop will call again
     return;
 
 error:
-    (void)0; /* Stop weird warning about declaration after label? */
-
-    printf("Going to error path\n");
-
     conn->closed = 1;
-
     return;
+
+    res = ls_build_simple_http_response(http_ctx->pool, req, 500, "Internal Server Error");
+    goto res_done;
 }
 
 static int ls_send_http_response(ls_connection_t* conn, ls_http_response_t* res)
@@ -271,7 +309,9 @@ static int ls_send_http_response(ls_connection_t* conn, ls_http_response_t* res)
         }
         if (n == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return LS_HTTP_SEND_AGAIN;
-            perror("sendfile");
+            const char* msg = "WARNING: Error sending file to client\n";
+            ls_log_write(conn->worker->server->log_cfg, msg, strlen(msg), LS_LOG_WARNING);
+            // perror("sendfile");
             return LS_HTTP_SEND_ERR;
         }
     }
@@ -286,42 +326,77 @@ void ls_write_handler_http(ls_event_t* ev)
     conn->expire_at = now_ms() + (5 * 1000);
     ls_http_ctx_t* http_ctx = (ls_http_ctx_t*)conn->protocol_ctx;
     ls_http_response_t* res = http_ctx->res;
+    ls_log_cfg_t* log_cfg = conn->worker->server->log_cfg;
 
-    int rc = LS_HTTP_SEND_AGAIN;
-    /* Handle this properly later */
-    while(rc == LS_HTTP_SEND_AGAIN) {
-        rc = ls_send_http_response(conn, res);
-    }
-   
+    int rc = ls_send_http_response(conn, res);
+    if (rc == LS_HTTP_SEND_AGAIN) return;
+
+    if (res->file_fd != -1) close(res->file_fd);
 
     if (rc == LS_HTTP_SEND_OK) {
+        ls_log_combined(res, conn);
+        if(res->status != 200) {
+            conn->closed = 1;
+            return;
+        }
         /* finished sending: remove EPOLLOUT interest, cleanup response and close connection */
         struct epoll_event ee;
-        ee.events = EPOLLIN; 
-        ee.data.ptr = &conn->read_event; 
+        ee.events = EPOLLIN;
+        ee.data.ptr = &conn->read_event;
 
         /* modify to remove EPOLLOUT; use EPOLL_CTL_MOD if socket already registered */
         if (epoll_ctl(conn->worker->epfd, EPOLL_CTL_MOD, conn->fd, &ee) == -1) {
             printf("HANDLE THIS\n");
             return;
         }
+
+/*
+        ls_http_request_t* old_req = http_ctx->req;
+        size_t overflow_len = 0;
+        const u_char* overflow_start = NULL;
+
+        if (old_req->request_end && (old_req->request_end < old_req->raw_request + old_req->request_len)) {
+            overflow_start = old_req->request_end;
+            overflow_len = (size_t)((old_req->raw_request + old_req->request_len) - old_req->request_end);
+        }
+
+        u_char *overflow_copy = NULL;
+        if (overflow_len > 0) {
+            overflow_copy = malloc(overflow_len);
+            if (overflow_copy == NULL) {
+                conn->closed = 1;
+                return;
+            }
+            memcpy(overflow_copy, overflow_start, overflow_len);
+        }
+*/
         ls_free_pool(http_ctx->pool);
 
         http_ctx->pool = ls_init_mem_pool(LS_DEFAULT_BLOCK_SIZE);
         if(http_ctx->pool == NULL) {
             printf("Error creating pool for http_ctx in ls_write_handler_http\n");
+            //      free(overflow_copy);
+            conn->closed = 1;
+            return;
         }
+
         http_ctx->req = ls_create_request(http_ctx->pool);
-        http_ctx->res = NULL;
         http_ctx->req->raw_request = ls_palloc(http_ctx->pool, LS_MAX_HTTP_SIZE);
         http_ctx->req->cursor = http_ctx->req->raw_request;
-        http_ctx->res_in_progress = 0;
-        conn->expire_at = now_ms() + (5 * 1000);
+        http_ctx->res = NULL;
+
+/*
+        if (overflow_len > 0) {
+            memcpy(http_ctx->req->raw_request, overflow_copy, overflow_len);
+            http_ctx->req->request_len = overflow_len;
+            http_ctx->req->raw_request[overflow_len] = '\0';
+            free(overflow_copy);
+        }
+*/
 
     } else { /* LS_HTTP_SEND_ERR */
-        /* fatal error: cleanup */
-        printf("FIX THIS\n");
-        if (res->file_fd != -1) close(res->file_fd);
+        const char* msg = "WARNING: Error sending data to client\n";
+        ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         http_ctx->res = NULL;
         conn->closed = 1;
     }

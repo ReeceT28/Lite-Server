@@ -140,3 +140,18 @@ ls_http_response_t* ls_build_http_response(ls_mem_pool_t* pool, ls_http_request_
 
     return res;
 }
+
+ls_http_response_t* ls_build_simple_http_response(ls_mem_pool_t* pool, ls_http_request_t* req, int status, const char* text)
+{
+    ls_http_response_t* res = ls_palloc(pool, sizeof(ls_http_response_t));
+    memset(res, 0, sizeof(ls_http_response_t));
+    res->response = ls_palloc(pool, MAX_RESPONSE_SIZE);
+    res->file_fd = -1;
+    res->status = status;
+    ls_write_status_line(res, 1, 1, status, text);
+    ls_append(res, "\r\n", 2);
+    return res;
+}
+
+
+

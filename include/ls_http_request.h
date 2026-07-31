@@ -51,6 +51,7 @@ typedef struct {
 typedef struct {
     ls_array_t* headers;
     unsigned int header_capacity;
+    uint64_t receival_time;  
     int method;
     int state;
     const u_char* cursor;
@@ -84,7 +85,7 @@ typedef struct {
     unsigned int http_major;
 } ls_http_request_t;
 
-int store_header(ls_http_request_t *req);
+int ls_store_header(ls_http_request_t *req);
 typedef int (*ls_http_header_handler_ptr)(ls_http_request_t* req);
 
 ls_http_request_t* ls_create_request(ls_mem_pool_t* pool);

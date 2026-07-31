@@ -775,6 +775,7 @@ static inline int check_eohs(const u_char* cursor, const u_char* end, ls_http_re
       if (*cursor == '\n') {
         req->state = LS_HTTP_END_OF_HEADERS;
         req->cursor = cursor;
+        req->request_end = ++cursor;
         return LS_ERR_OKAY;
       }
       if (cursor >= end) {
@@ -785,6 +786,7 @@ static inline int check_eohs(const u_char* cursor, const u_char* end, ls_http_re
     else if (*cursor == '\n') {
         req->cursor = cursor;
         req->state = LS_HTTP_END_OF_HEADERS;
+        req->request_end = ++cursor;
         return LS_ERR_OKAY;
     }
     return LS_ERR_BAD_REQUEST;
@@ -846,14 +848,18 @@ static int parse_header_lines(const u_char* cursor, const u_char* end, ls_http_r
         
         // Only store if this is a real header (name_start is non-NULL)
         if (req->header_name_start != NULL) {
-            if(!store_header(req)) {
-                return LS_ERR_HEADER_STORAGE_FAILURE;
+            int code = ls_store_header(req);
+            if(code < 0) {
+                if(code == -1) {
+                    return LS_ERR_TOO_MANY_HEADERS;
+                } else {
+                    return LS_ERR_INTERNAL_FAILURE;
+                }
             }
         }
         
         // After storing, check if we've reached end of headers
         if (req->state == LS_HTTP_END_OF_HEADERS) {
-            req->request_end = req->cursor;
             return LS_ERR_OKAY;
         }
         

@@ -63,9 +63,9 @@ enum {
 enum {
     LS_ERR_OKAY,
     LS_ERR_BAD_REQUEST,
-    LS_ERR_NOT_IMPLEMENTED,
     LS_ERR_NEED_MORE_CHARS,
-    LS_ERR_HEADER_STORAGE_FAILURE
+    LS_ERR_INTERNAL_FAILURE,
+    LS_ERR_TOO_MANY_HEADERS
 };
 
 /* Possible states during parsing */

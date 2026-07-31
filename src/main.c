@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/resource.h>
 #include <netdb.h>
 #include <string.h>
 #include <pthread.h>
@@ -73,7 +74,7 @@ static int ls_expire_connections(ls_worker_t* worker)
 }
 
 /**
- * @brief Closes connections on a worker thread, by finalising the closing of all connections in this function less code is repeated and will make errors caused by closing connections incorrectly less likely 
+ * @brief Closes connections on a worker thread, by finalising the closing of all connections in this function less code is repeated and will make errors caused by closing connections incorrectly less likely
  * @param worker Pointer to the worker thread which connections will be expired on
  * @return On success 0, On failure -1
  */
@@ -97,10 +98,9 @@ static int ls_close_connections(ls_worker_t* worker)
             ls_free_pool(http_ctx->pool);
             ls_free_pool(conn->pool);
             /* Swap this now expired connection with the last valid connection */
-            size_t idx = conn->index;
             size_t last = worker->n_connections - 1;
-            worker->connections[idx] = worker->connections[last];
-            worker->connections[idx]->index = idx;
+            worker->connections[i] = worker->connections[last];
+            worker->connections[i]->index = i;
             worker->connections[last] = conn;
             worker->n_connections--;
             /* Decrement the iterator or the element we just swapped to this position would be missed */
@@ -110,6 +110,18 @@ static int ls_close_connections(ls_worker_t* worker)
     return 0;
 }
 
+int count_open_fds() {
+    int count = 0;
+    int max_fds = sysconf(_SC_OPEN_MAX);  // Get max number of file descriptors
+
+    for (int fd = 0; fd < max_fds; fd++) {
+        if (fcntl(fd, F_GETFD) != -1) {
+            count++;
+        }
+    }
+
+    return count;
+}
 /**
  * @brief runs the event loop for a worker thread
  * @param worker Pointer to the worker thread which the epoll loop is running on
@@ -120,6 +132,7 @@ static void run_event_loop(ls_worker_t* worker) {
     ls_log_cfg_t* log_cfg = worker->server->log_cfg;
 
     while (1) {
+        //printf("Open file descriptors: %d\n", count_open_fds());
         /* Compute maximum timeout to wait for events before moving on to expire connections */
         int timeout = compute_epoll_timeout(worker);
         if(timeout == -67) {
@@ -154,7 +167,31 @@ static void run_event_loop(ls_worker_t* worker) {
 
 int main()
 {
-    signal(SIGPIPE,SIG_IGN);
+    struct rlimit limits;
+
+    // Get current limits
+    getrlimit(RLIMIT_NOFILE, &limits);
+    printf("Current soft limit: %ld\n", limits.rlim_cur);
+    printf("Current hard limit: %ld\n", limits.rlim_max);
+
+    // Set new limit (soft limit to 4096, hard limit to 8192)
+    limits.rlim_cur = 16384;
+    limits.rlim_max = 32768;
+
+    if (setrlimit(RLIMIT_NOFILE, &limits) == -1) {
+        perror("setrlimit");
+        return 1;
+    }
+
+    // Verify the change
+    getrlimit(RLIMIT_NOFILE, &limits);
+    printf("New soft limit: %ld\n", limits.rlim_cur);
+    printf("New hard limit: %ld\n", limits.rlim_max);
+
+    struct sigaction sa = {0};
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGPIPE, &sa, NULL);
+
     /* Initialise core modules */
     if(ls_http_parser_init() == -1) {
         fprintf(stderr, "ERROR: Failed to initialise the http parsing module when creating the trie for header parsing");
@@ -282,7 +319,8 @@ int main()
 
     /* Set the root directory where web server's files will be accessed from */
     char abs_root[PATH_MAX];
-    if(realpath("/var/www/my_site/cv-site", abs_root) == NULL) {
+    if(realpath("/home/reecet/vscodeproject/cv-site", abs_root) == NULL) {
+
         const char* msg = "ERROR: Failed to resolve the path for the servers root directory\n";
         ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
         return -1;

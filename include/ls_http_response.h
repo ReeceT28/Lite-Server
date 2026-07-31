@@ -16,4 +16,5 @@ typedef struct ls_http_response_s {
 } ls_http_response_t;
 
 ls_http_response_t* ls_build_http_response(ls_mem_pool_t* pool, ls_http_request_t* req, ls_server_context_t* server);
+ls_http_response_t* ls_build_simple_http_response(ls_mem_pool_t* pool, ls_http_request_t* req, int status, const char* text);
 /* Maybe create function pointers for ls_send_http_response */
