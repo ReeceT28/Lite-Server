@@ -3,3 +3,4 @@ html/
 build/
 build-tests/
 www/testlog.log
+*.swp

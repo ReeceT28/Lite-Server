@@ -10,7 +10,9 @@ typedef struct ls_server_context_s {
     u_char* root;
     ls_log_cfg_t* log_cfg;
     ls_mem_pool_t* pool;
-} ls_server_context_t;
+    /* NO IDEA WHAT TO CALL THIS SHIT will change its name probably */ 
+    ls_array_t* user_functions;
+ } ls_server_context_t;
 
 typedef struct ls_worker_s {
     int epfd;
@@ -22,3 +24,4 @@ typedef struct ls_worker_s {
 } ls_worker_t;
 
 void ls_set_root_dir(ls_server_context_t* server, const char* root);
+int ls_add_user_function(ls_server_context_t* server, const char* resource);

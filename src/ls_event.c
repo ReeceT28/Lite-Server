@@ -111,7 +111,6 @@ void ls_accept_handler(ls_event_t* ev)
 
         http_ctx->req->raw_request = ls_palloc(http_ctx->pool, LS_MAX_HTTP_SIZE);
         http_ctx->req->cursor = http_ctx->req->raw_request;
-        http_ctx->res_in_progress = 0;
     }
     else {
         close(client_fd);
@@ -226,11 +225,7 @@ void ls_read_handler_http(ls_event_t *ev)
         }
         const char* msg = "WARNING: Error during parsing of http request\n";
         ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
-        /* CHECK OTHER ERRORS HERE FOR RESPONSE CODES */
         if(err_code == LS_ERR_BAD_REQUEST) {
-            // ls_print_parsed_request(req);
-//          /* TEMPORARYYYYYYYYYYYYYYYYYYYYYYYYY*/
-
             conn->closed = 1;
             return;
             res = ls_build_simple_http_response(http_ctx->pool, req, 400, "Bad Request");

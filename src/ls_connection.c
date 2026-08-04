@@ -15,7 +15,7 @@
 int ls_create_lstning_sock(ls_lstning_sock_t* sock)
 {
     ls_log_cfg_t* log_cfg = sock->worker->server->log_cfg;
-    char foo[69];
+    char foo[67];
     snprintf(foo, sizeof(foo), "DEBUG: Creating listening socket on port %d\n", sock->config.port);
     ls_log_write(log_cfg, foo, strlen(foo), LS_LOG_DEBUG);
 
@@ -49,7 +49,7 @@ int ls_create_lstning_sock(ls_lstning_sock_t* sock)
     }
 
     /* Get the current file status flags of the listening socket I believe this should just be 0 but might as well be safe for now */
-    int flags = fcntl(fd, F_GETFL, 69);
+    int flags = fcntl(fd, F_GETFL, 67);
     if (flags == -1) {
         const char* msg = "WARNING: Failed to get status flags of listening socket during creation\n";
         ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
@@ -67,7 +67,7 @@ int ls_create_lstning_sock(ls_lstning_sock_t* sock)
     /* Configure socket for IPv4 or IPv6, only bothering with IPv4 currently, however, I have tried to make most parts of the program independent of IPv4 or IPv6 e.g. logging */
     if (sock->config.family == AF_INET) {
         /* setup addr to point to the sockaddr_storage* in the socket but cast to sockaddr_in* as we are using IPv4 */
-        struct sockaddr_in *addr = (struct sockaddr_in *)&sock->sockaddr;
+        struct sockaddr_in* addr = (struct sockaddr_in *)&sock->sockaddr;
         /* Make sure no rubbish in memory */
         memset(addr, 0, sizeof(*addr));
         addr->sin_family = AF_INET;
@@ -103,17 +103,4 @@ int ls_create_lstning_sock(ls_lstning_sock_t* sock)
 
     sock->fd = fd;
     return 0;
-}
-
-void ls_close_connection(ls_connection_t *conn)
-{
-    if (conn->closed) return;
-    conn->closed = 1;
-    epoll_ctl(conn->worker->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
-    close(conn->fd);
-    if (conn->pool) {
-      ls_free_pool(conn->pool);
-      conn->pool = NULL;
-    }
-    conn->protocol_ctx = NULL;
 }

@@ -110,18 +110,6 @@ static int ls_close_connections(ls_worker_t* worker)
     return 0;
 }
 
-int count_open_fds() {
-    int count = 0;
-    int max_fds = sysconf(_SC_OPEN_MAX);  // Get max number of file descriptors
-
-    for (int fd = 0; fd < max_fds; fd++) {
-        if (fcntl(fd, F_GETFD) != -1) {
-            count++;
-        }
-    }
-
-    return count;
-}
 /**
  * @brief runs the event loop for a worker thread
  * @param worker Pointer to the worker thread which the epoll loop is running on
@@ -165,28 +153,70 @@ static void run_event_loop(ls_worker_t* worker) {
     }
 }
 
+/* I'm gonna call resource test.c even though it'll be function not source files but doens't matter*/
+static int test(ls_http_request_t* req, ls_http_response_t* res, ls_mem_pool_t* pool)
+{
+    /* Let's try actually doing something now! */
+    printf("IN test()\n");
+    res->response = ls_palloc(pool, MAX_RESPONSE_SIZE);
+    res->file_fd = -1; 
+    res->status = 201;
+    ls_write_status_line(res, 1, 1, 201, "Created");
+    /* req_end points to end of headers so should be start of the body */
+    u_char* req_end = req->request_end;
+    int content_length = 0;
+
+    ls_array_t* header_arr = req->headers;
+    ls_header_t* curr = header_arr->head;
+    size_t idx = 0;
+
+    /* Iterate over all resources associated with a user supplied function and compare with the one in the request */
+    while(idx < header_arr->n_elmnts)
+    {
+        curr = &((ls_header_t*)header_arr->head)[idx];
+        if(curr->header_id == LS_HTTP_HDR_CONTENT_LENGTH) {
+            int len = curr->value_end - curr->value_start;
+            char* foo = ls_palloc(pool, len + 1); /* +1 for null terminator */
+            snprintf(foo, len + 1, "%.*s\0", len, curr->value_start); 
+            content_length = atoi(foo);
+            printf("%s\n", foo);
+            if(content_length == 0) {
+                fprintf(stderr, "error converting content length to integer value\n");
+                return -1;
+            }
+            break;
+        }
+        curr += sizeof(ls_header_t); 
+        ++idx; 
+    }
+    
+    char user_data[100];
+    snprintf(user_data, 100, "%.*s\n", content_length, req_end);
+    
+    /* Hard code for testing - dont bother with checks for now */
+    int fd = open("/home/reecet/Documents/cv-site/post_test.txt", O_APPEND | O_WRONLY);
+    ssize_t n = write(fd, user_data, strlen(user_data));   
+    
+    printf("SHOULD HAVE WORKED\n");
+
+    return 0; /* 0 to indicate success can use -1 to indicate fail */
+}
+
+
 int main()
 {
+    /* Increase file descriptor limit for this process */
     struct rlimit limits;
 
-    // Get current limits
     getrlimit(RLIMIT_NOFILE, &limits);
-    printf("Current soft limit: %ld\n", limits.rlim_cur);
-    printf("Current hard limit: %ld\n", limits.rlim_max);
 
-    // Set new limit (soft limit to 4096, hard limit to 8192)
     limits.rlim_cur = 16384;
     limits.rlim_max = 32768;
 
     if (setrlimit(RLIMIT_NOFILE, &limits) == -1) {
         perror("setrlimit");
-        return 1;
+        return -1;
     }
-
-    // Verify the change
-    getrlimit(RLIMIT_NOFILE, &limits);
-    printf("New soft limit: %ld\n", limits.rlim_cur);
-    printf("New hard limit: %ld\n", limits.rlim_max);
 
     struct sigaction sa = {0};
     sa.sa_handler = SIG_IGN;
@@ -260,6 +290,23 @@ int main()
         return -1;
     }
 
+    /* Create the array of resource to function pointers */
+    server_context->user_functions = ls_create_array(server_pool, sizeof(ls_resource_function_t), 1);
+    if(server_context->user_functions == NULL) {
+        const char* msg = "ERROR: Failed to create array for server's resource to user supplied function mapping\n";
+        ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
+        return -1;
+    }
+    /* Push something to it to test it out */
+    ls_resource_function_t* resource_function = (ls_resource_function_t*)ls_array_push(server_context->user_functions);
+    *resource_function = (ls_resource_function_t){
+        .resource = "/test.c",
+        .user_function = test
+    };
+    
+    
+
+
     /* Configure the socket to listen on the worker */
     ls_lstning_sock_t* sock = (ls_lstning_sock_t*)ls_array_push(server_context->lstning_sockets);
     if(sock == NULL) {
@@ -319,7 +366,7 @@ int main()
 
     /* Set the root directory where web server's files will be accessed from */
     char abs_root[PATH_MAX];
-    if(realpath("/home/reecet/vscodeproject/cv-site", abs_root) == NULL) {
+    if(realpath("/home/reecet/Documents/cv-site", abs_root) == NULL) {
 
         const char* msg = "ERROR: Failed to resolve the path for the servers root directory\n";
         ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
