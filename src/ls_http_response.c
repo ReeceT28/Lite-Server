@@ -33,53 +33,41 @@ void ls_write_status_line(ls_http_response_t* res, int http_major, int http_mino
 
 static void ls_handle_get(ls_http_request_t* req, ls_http_response_t* res, ls_server_context_t* server)
 {
+    res->file_fd = -1;
+
     if (req->http_major != 1 || req->http_minor != 1) {
         res->status = 505;
         ls_write_status_line(res, 1, 1, 505, "HTTP Version Not Supported");
-        ls_append(res, "\r\n", 2);
-        return;
+        goto headers;
     }
 
-    char* path = (char*)req->path_start;
-    size_t len = (char*)req->path_end - path;
+    const char* path = (const char*)req->path_start;
+    int path_len = (const char*)req->path_end - path;
 
-    const char *root = (const char*)server->root;
-    size_t root_len = strlen(root);
+    /* Get the file path from the request */
+    char rel_buf[PATH_MAX];
 
-    char resolved_path[PATH_MAX];
-    char real_path[PATH_MAX];
-
-    // Handle "/"
-    if (len == 1 && path[0] == '/') {
-        snprintf(resolved_path, PATH_MAX, "%s/index.html", root);
+    if(path_len == 1  && path[0] == '/') {
+        snprintf(rel_buf, sizeof(rel_buf), "index.html");
     } else {
-        snprintf(resolved_path, PATH_MAX, "%s%.*s", root, (int)len, path);
+        for(int i = 0; i < path_len - 1; ++i) {
+            /* Reject ".."'s as can be used for directory traversal, could be legitimately used but I can't see many applications*/
+            if(path[i] == '.' && path[i+1] == '.') {
+                res->status = 403;
+                ls_write_status_line(res, 1, 1, 403, "Forbidden");
+                goto headers;
+            }
+        }
+        snprintf(rel_buf, sizeof(rel_buf), "%.*s", path_len - 1, path + 1);
     }
 
-    // Resolve path
-    if (!realpath(resolved_path, real_path)) {
-        res->status = 404;
-        ls_write_status_line(res, 1, 1, 404, "Not Found");
-        ls_append(res, "\r\n", 2);
-        return;
-    }
-
-    // Enforce root
-    if (strncmp(real_path, root, root_len) != 0 ||
-        (real_path[root_len] != '/' && real_path[root_len] != '\0')) {
-        res->status = 403;
-        ls_write_status_line(res, 1, 1, 403, "Forbidden");
-        ls_append(res, "\r\n", 2);
-        return;
-    }
-
-    // Open file
-    int fd = open(real_path, O_RDONLY);
+    /* Open file, for safety ensure read only and symlinks are not followed (for now unless I find a valid use for having symlinks) */
+    int fd = openat(server->root_fd, rel_buf , O_RDONLY | O_NOFOLLOW);
+    
     if (fd < 0) {
         res->status = 404;
         ls_write_status_line(res, 1, 1, 404, "Not Found");
-        ls_append(res, "\r\n", 2);
-        return;
+        goto headers;
     }
 
     struct stat st;
@@ -87,8 +75,7 @@ static void ls_handle_get(ls_http_request_t* req, ls_http_response_t* res, ls_se
         close(fd);
         res->status = 403;
         ls_write_status_line(res, 1, 1, 403, "Forbidden");
-        ls_append(res, "\r\n", 2);
-        return;
+        goto headers;
     }
 
     res->file_fd = fd;
@@ -98,7 +85,7 @@ static void ls_handle_get(ls_http_request_t* req, ls_http_response_t* res, ls_se
     ls_write_status_line(res, 1, 1, 200, "OK");
 
     const char* content_type = "application/octet-stream";
-    char* dot = strrchr(real_path, '.');
+    char* dot = strrchr(rel_buf, '.');
 
     if (dot) {
         if (strcmp(dot, ".html") == 0) content_type = "text/html";
@@ -115,17 +102,17 @@ static void ls_handle_get(ls_http_request_t* req, ls_http_response_t* res, ls_se
         if (l > 0) ls_append(res, buf, (size_t)l);
     }
 
-    // Content-Length
+    /* Below this point are all headers that should be on any GET request that reached this function */
+headers:
+
     {
         char buf[128];
         int l = snprintf(buf, sizeof(buf), "Content-Length: %ld\r\n", res->file_size);
         if (l > 0) ls_append(res, buf, (size_t)l);
     }
 
-    // Connection header
-    // ls_append(res, "Connection: close\r\n", 19);
+    /* ls_append(res, "Connection: close\r\n", 19); */
 
-    // End headers
     ls_append(res, "\r\n", 2);
 }
 
@@ -155,7 +142,7 @@ static void ls_handle_post(ls_http_request_t* req, ls_http_response_t* res, ls_s
 
 ls_http_response_t* ls_build_http_response(ls_mem_pool_t* pool, ls_http_request_t* req, ls_server_context_t* server)
 {
-    ls_http_response_t* res = ls_palloc(pool, sizeof(ls_http_response_t));
+    register ls_http_response_t* res = ls_palloc(pool, sizeof(ls_http_response_t));
     memset(res, 0, sizeof(ls_http_response_t));
     res->response = ls_palloc(pool, MAX_RESPONSE_SIZE);
     /* Just gonna get POST to call special user defined function for now, don't want to break GET but eventually I will add a check before doing any of the built in handlers

@@ -105,6 +105,7 @@ void ls_log_combined(ls_http_response_t* res, ls_connection_t* conn)
     struct sockaddr_storage ss;
     socklen_t len = sizeof(ss);
     if (getpeername(sock, (struct sockaddr*)&ss, &len) == -1) {
+        perror("GETPEERNAME: ");
         const char* msg = "WARNING: Failed to get address of peer when building combined log format\n";
         ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         return;
@@ -152,6 +153,7 @@ void ls_log_combined(ls_http_response_t* res, ls_connection_t* conn)
 void ls_log_disconnect(ls_connection_t* connection, ls_log_cfg_t* log)
 {
     if(!((log->log_cfgs & LS_LOG_ENABLED) && (log->log_cfgs & LS_LOG_EVENT_DISCONNECT))) return;
+    if(connection->host_name == NULL) return;
     /* WARNING WARNING WARNING NEED TO DO SOMETHING ABOUT DISCONNECT ONLY WORKING IF CONNECTION LOG RUNS */
     time_t now = time(NULL);
     struct tm tm;

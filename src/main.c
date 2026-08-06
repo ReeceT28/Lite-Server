@@ -244,7 +244,8 @@ int main()
     }
     server_context->pool = server_pool;
     /* Configure logging for this server */
-    if(ls_log_init(LS_ENABLE_LOGGING | LS_LOG_INFO | LS_LOG_DEBUG | LS_LOG_ERROR | LS_LOG_WARNING, "www/testlog.log", server_context) == -1) {
+    /* LS_ENABLE_LOGGING | LS_LOG_INFO | LS_LOG_DEBUG | LS_LOG_ERROR | LS_LOG_WARNING*/
+    if(ls_log_init(0, "www/testlog.log", server_context) == -1) {
         fprintf(stderr, "ERROR: Failed to initialise the logging module");
         return -1;
     }
@@ -366,7 +367,7 @@ int main()
 
     /* Set the root directory where web server's files will be accessed from */
     char abs_root[PATH_MAX];
-    if(realpath("/home/reecet/Documents/cv-site", abs_root) == NULL) {
+    if(realpath("www/", abs_root) == NULL) {
 
         const char* msg = "ERROR: Failed to resolve the path for the servers root directory\n";
         ls_log_write(server_context->log_cfg, msg, strlen(msg), LS_LOG_ERROR);
@@ -374,6 +375,7 @@ int main()
     }
 
     ls_set_root_dir(server_context, abs_root);
+    server_context->root_fd = open(abs_root, O_RDONLY | O_DIRECTORY);
 
     /* Run the event loop */
     run_event_loop(worker);

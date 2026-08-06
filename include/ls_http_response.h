@@ -8,6 +8,7 @@
 typedef struct ls_http_response_s {
     int status;
     int file_fd; 
+    int res_in_progress;
     off_t file_size;
     off_t file_offset;
     char* response;

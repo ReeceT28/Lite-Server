@@ -1,5 +1,6 @@
 #include <sys/sendfile.h>
 #include <arpa/inet.h>
+#include <netinet/tcp.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -55,6 +56,12 @@ void ls_accept_handler(ls_event_t* ev)
         return;
     }
 
+    int one = 1;
+    if(setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) < 0) {
+        fprintf(stderr, "BAD\n");
+
+    }
+
     size_t idx = worker->n_connections;
     if (idx >= worker->max_connections) {
         close(client_fd);
@@ -91,6 +98,7 @@ void ls_accept_handler(ls_event_t* ev)
         conn->write_event.handler = ls_write_handler_http;
         conn->write_event.data = conn;
         ls_http_ctx_t* http_ctx = ls_palloc(pool, sizeof(ls_http_ctx_t));
+        memset(http_ctx, 0, sizeof(*http_ctx));
         if(http_ctx == NULL){
             close(client_fd);
             ls_free_pool(pool);
@@ -150,6 +158,7 @@ void ls_read_handler_http(ls_event_t *ev)
     ls_connection_t* conn = ev->data;
     if(conn->closed) return;
     ls_http_ctx_t* http_ctx = (ls_http_ctx_t*)conn->protocol_ctx;
+    if(http_ctx->res != NULL) return;
     ls_http_request_t* req = http_ctx->req;
     ls_http_response_t* res = NULL;
     ls_log_cfg_t* log_cfg = conn->worker->server->log_cfg;
@@ -173,8 +182,6 @@ void ls_read_handler_http(ls_event_t *ev)
         if(time - req->receival_time > 2 * 1000) {
             const char* msg = "WARNING: HTTP request took over the maximum time to complete parsing, possible slowloris attack attempt\n";
             ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
-            conn->closed = 1;
-            return;
             res = ls_build_simple_http_response(http_ctx->pool, req, 408, "Request Timeout");
             goto res_done;
         }
@@ -185,8 +192,6 @@ void ls_read_handler_http(ls_event_t *ev)
     if (remaining <= 0) {
         const char* msg = "WARNING: HTTP request size has exceeded the maximum - possible malicious request\n";
         ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
-            conn->closed = 1;
-            return;
         res = ls_build_simple_http_response(http_ctx->pool, req, 413, "Content Too Large");
         goto res_done;
     }
@@ -196,7 +201,12 @@ void ls_read_handler_http(ls_event_t *ev)
 
     ssize_t n = read(conn->fd, curr_end, to_read);
 
-    if (n == -1 && (errno != EAGAIN && errno!= EWOULDBLOCK)) {
+    if(n == 0) {
+        conn->closed = 1;
+        return;
+    }
+    if (n == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return; 
         const char* msg = "WARNING: Error when attempting to read from client's socket\n";
         ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         goto error;
@@ -209,8 +219,6 @@ void ls_read_handler_http(ls_event_t *ev)
     } else {
         const char* msg = "WARNING: HTTP request size has exceeded the maximum - possible malicious request\n";
         ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
-            conn->closed = 1;
-            return;
         res = ls_build_simple_http_response(http_ctx->pool, req, 413, "Content Too Large");
         goto res_done;
     }
@@ -226,14 +234,10 @@ void ls_read_handler_http(ls_event_t *ev)
         const char* msg = "WARNING: Error during parsing of http request\n";
         ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         if(err_code == LS_ERR_BAD_REQUEST) {
-            conn->closed = 1;
-            return;
             res = ls_build_simple_http_response(http_ctx->pool, req, 400, "Bad Request");
             goto res_done;
         }
         else if(err_code == LS_ERR_TOO_MANY_HEADERS) {
-            conn->closed = 1;
-            return;
             res = ls_build_simple_http_response(http_ctx->pool, req, 431, "Request Header Fields Too Large");
             goto res_done;
         }
@@ -266,9 +270,6 @@ res_done:
     return;
 
 error:
-    conn->closed = 1;
-    return;
-
     res = ls_build_simple_http_response(http_ctx->pool, req, 500, "Internal Server Error");
     goto res_done;
 }
@@ -276,17 +277,23 @@ error:
 static int ls_send_http_response(ls_connection_t* conn, ls_http_response_t* res)
 {
     ssize_t n;
+
+    int flag = 0;
+    if(res->file_fd != -1) flag = MSG_MORE;
+
     /* 1. Send headers first */
     while (res->response_sent < res->response_size) {
-        n = send(conn->fd, res->response + res->response_sent,res->response_size - res->response_sent,0);
+        n = send(conn->fd, res->response + res->response_sent,res->response_size - res->response_sent, flag);
         if (n > 0) {
             res->response_sent += n;
             continue;
         }
-        /* CHECK THESE */
+        if(n == 0) {
+            return LS_HTTP_SEND_ERR;
+        }
         if (n == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return LS_HTTP_SEND_AGAIN;
-            perror("send");
+            // perror("send");
             return LS_HTTP_SEND_ERR;
         }
     }
@@ -330,10 +337,6 @@ void ls_write_handler_http(ls_event_t* ev)
 
     if (rc == LS_HTTP_SEND_OK) {
         ls_log_combined(res, conn);
-        if(res->status != 200) {
-            conn->closed = 1;
-            return;
-        }
         /* finished sending: remove EPOLLOUT interest, cleanup response and close connection */
         struct epoll_event ee;
         ee.events = EPOLLIN;
@@ -341,7 +344,8 @@ void ls_write_handler_http(ls_event_t* ev)
 
         /* modify to remove EPOLLOUT; use EPOLL_CTL_MOD if socket already registered */
         if (epoll_ctl(conn->worker->epfd, EPOLL_CTL_MOD, conn->fd, &ee) == -1) {
-            printf("HANDLE THIS\n");
+            // printf("HANDLE THIS\n");
+            conn->closed = 1;
             return;
         }
 
@@ -379,6 +383,7 @@ void ls_write_handler_http(ls_event_t* ev)
         http_ctx->req->raw_request = ls_palloc(http_ctx->pool, LS_MAX_HTTP_SIZE);
         http_ctx->req->cursor = http_ctx->req->raw_request;
         http_ctx->res = NULL;
+
 
 /*
         if (overflow_len > 0) {

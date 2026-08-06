@@ -102,6 +102,7 @@ static void* small_palloc(ls_mem_pool_t* pool, size_t size)
     else {
         /* Alternative approach is we can track number of failed allocs per block and move on if we get too many but still try ones with not too many fails. */
         void* ptr = alloc_block(pool);
+        if(ptr == NULL) return NULL;
         pool->current->next_free = ptr + size;
         return ptr;
     }

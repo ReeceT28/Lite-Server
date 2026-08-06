@@ -12,6 +12,7 @@ typedef struct ls_server_context_s {
     ls_mem_pool_t* pool;
     /* NO IDEA WHAT TO CALL THIS SHIT will change its name probably */ 
     ls_array_t* user_functions;
+    int root_fd;
  } ls_server_context_t;
 
 typedef struct ls_worker_s {
