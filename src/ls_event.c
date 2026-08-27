@@ -9,7 +9,7 @@
 #include <malloc.h>
 #include "ls_event.h"
 #include "ls_utils.h"
-#include "ls_http_parser_test.h"
+#include "ls_worker.h"
 #include "ls_http_parser.h"
 #include "ls_http_request.h"
 #include "ls_connection.h"
@@ -206,7 +206,7 @@ void ls_read_handler_http(ls_event_t *ev)
         return;
     }
     if (n == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return; 
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
         const char* msg = "WARNING: Error when attempting to read from client's socket\n";
         ls_log_write(log_cfg, msg, strlen(msg), LS_LOG_WARNING);
         goto error;
@@ -304,8 +304,7 @@ static int ls_send_http_response(ls_connection_t* conn, ls_http_response_t* res)
         if (n > 0) {
             /* sendfile on Linux advances file_offset for us via the pointer */
             if (res->file_offset >= res->file_size) {
-                close(res->file_fd);
-                res->file_fd = -1;
+                break;
             }
             continue;
         }

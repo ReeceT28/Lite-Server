@@ -4,6 +4,8 @@
 #include "ls_event.h"
 #include "ls_server.h"
 
+typedef struct ls_worker_s ls_worker_t;
+
 /* Configuration for listening sockets */
 typedef struct ls_socket_conf_s {
     int family;
